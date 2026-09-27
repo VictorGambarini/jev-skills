@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import jevkit
 from jevkit import skillpick
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -46,7 +47,8 @@ class LauncherTests(unittest.TestCase):
             result = subprocess.run([str(ROOT / "bin" / "jev"), "--version"], cwd=d,
                                     env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("0.19", result.stdout)
+        # The version the launcher reports, not a literal that breaks on every bump.
+        self.assertEqual(result.stdout.strip(), jevkit.__version__)
 
 
 class ManifestTests(unittest.TestCase):

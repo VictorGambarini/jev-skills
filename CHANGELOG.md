@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 0.20.0 (2026-09-27)
+
+Small agent decisions as policies, measured on one fleet's real history before any of them
+acts. Most of them did not earn a live switch, and this release says which.
+
+0.19.0 below was written up and bumped in the code on 2026-09-21 but never tagged or
+released on GitHub, so its GitHub release is folded into this one. Everything new here that
+could change what an agent does is off by default, or runs in shadow: it logs what Jev would
+have decided and changes nothing.
+
+**What measured well enough to ship** (the new agent-facing features among these are off until turned on)
+
+- Web results screened before the agent reads them: 70 of 79 planted attacks caught on 80
+  real results, 0 of 1,520 clean units withheld.
+- `triage_github.py` screening each PR and issue: 22 of 24 planted attacks caught, 0 of 24
+  untouched items marked (the second question was written after seeing the misses, so
+  optimistic until a held-out set confirms it).
+- Skill suggestions that stop repeating: on a replayed week, 51% of suggestions loaded
+  against 34%, with 8 loads lost. Parameters were chosen on that same week.
+- Pooled connections: `client.ask` median 522 ms to 178 ms. Routing and skill selection in
+  one request, measured to decide the same.
+- Lanes: in a controlled replay of 9 real commits, Sonnet at medium (Jev's pick for all 9)
+  passed 9/9 at $1.60 against 9/9 at $3.27 for Opus at high. n = 9.
+- Co-Agent first for computer use on a Mac: 10/10 on four real apps, about 0.45 s per Jev
+  step.
+- Fixes: `jev plan` 20/22 to 33/33 planned; `jev batch` no longer skips 60% of rows at the
+  rate limit; `jev search` stops looping when pages will not open; Linux text fields
+  reported as role `text` get typed into; the plugin manifest reports the running version.
+
+**What measured and was dropped, or stays in shadow**
+
+- Dropped after about 5 tuning rounds each, on 18,585 Jev calls over real history: Kanban
+  retry, blocked-card-needs-a-person, cron wake, card owner, completion pre-screen,
+  stale-triage alert, cron-report delivery, and an output trimmer. None beat the current
+  way. Their policies and hooks ship, off; `kanban_done` runs only with a named local
+  policy.
+- Shadow: `gate-ask` (0 of 65 must-deny/ask fixtures approved, 52 of 53 harmless approved,
+  but extra prompts on 4.7% of real commands, above the 1-in-50 bar, and the thresholds were
+  chosen on those rows). `gate-strict` asked about or denied 73% of real commands.
+- Shadow: the Jev-Omni vision hybrid. 84% would stay local, but it agreed with the current
+  model on 67%. Promotion should go through typed PASS/FAIL questions.
+- Shadow: Hermes lanes. Calibrated on 2,357 Kanban cards they are -1% tokens against
+  today's default; the article's effort ladder read literally would have cost +52%.
+- `gate-task` is not backtested: the red-team set has no tasks.
+- Measured and not adopted: permutation averaging on both Choice surfaces, stakes and margin
+  in `choose`, Stagehand's second question. Measured and kept: skill selection's stage 2.
+
+Tokens saved on the fleet by this release today: 0. The shadows cost about $0.07 a day and
+add no latency to a turn.
+
 - **Lanes: the smallest model that still gets it right** (`jev lane`, docs/lanes.md). After @0x_rody's "Claude → Opus 5.5 → Jev" orchestration pattern. Four lanes (`small`, `medium`, `high`, `escalate`) mapped to a real model and effort per host; Jev picks the first lane (policy `lane`: one request, a lane choice with an `other` escape, security and underspecification; ~0.5 confidence sends work up, not down) and decides each loop step (policy `loop-step`: continue / retry / verify / escalate / complete). Deterministic checks go first: `jev lane step --run <test> --scope <glob>` runs the tests, compiler, type checker or linter and reads `git diff`; failing checks, scope violations, unrun checks and security-sensitive changes are decided by code without a request. Escalation is one lane at a time and ends at a person. `complete` is refused while a check fails or the diff leaves its scope. Only the tail of a long check output reaches Jev.
   - **Claude Code.** The installer now writes four subagents (`~/.claude/agents/jev-lane-*.md`, `model` + `effort` frontmatter) and a short delimited block in `~/.claude/CLAUDE.md` (backed up first; `--no-claude-md` skips it; `--uninstall` removes exactly the block and our agents, never a person's own file of the same name).
   - **Hermes.** `jev lane shadow` (cron) classifies new Kanban cards with `lane-kanban` and logs what it would choose; switch `lanes` (`off` by default, `shadow`, `on`), kill file `LANES_OFF`. `on` sets a card's model and effort through Hermes's own Kanban API, only for cards with no override. `jev lane shadow-report` joins the log to outcomes.
@@ -319,10 +369,8 @@
   `invalid_response` / `score_matches_its_distribution` — the exact rule that exists because a flat
   spread averaging to 2.73 was filed at level 4 of 5 in the mailbox incident. Nothing was averaged
   into a tier from it.
-- Left under **Unreleased** on purpose: `tests/test_version_sync.py` requires a version to have a
-  dated release section, and cutting 0.19.1 here would have shipped the two entries below it as
-  part of a release nobody asked for. Move this block under `## 0.19.1 (<date>)` and bump both
-  version files when the release is actually cut.
+- Held back from a 0.19.1 at the time so that entries below it would not ship in a release
+  nobody had asked for; it ships in 0.20.0.
 
 **A question that states one requirement answers one thing**
 
