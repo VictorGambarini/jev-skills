@@ -733,7 +733,7 @@ def _smart_policy() -> Optional[str]:
 
 
 def _gate_job(payload: Dict[str, Any], queued: float) -> None:
-    if switches.mode("gate") == "off":
+    if switches.mode("gate") == "off" or _shadow_excluded():
         return
     decision = gate.check(str(payload.get("tool") or "terminal"), command=payload.get("command") or "",
                           flagged_as=payload.get("pattern_key"), pattern_keys=payload.get("pattern_keys") or (),
@@ -801,6 +801,15 @@ _SHADOW_POLICY = {"retry": "retry", "blockcheck": "blockcheck", "kanban_done": "
                   "owner": "owner", "gate_all": "gate-ask"}
 _GATE_ALL_TOOLS = ("terminal", "execute_code")
 _DRAIN_REGISTERED = False
+
+
+def _shadow_excluded() -> bool:
+    """Private profiles send nothing, nor do the ones listed in `shadow_exclude_profiles`
+    (jev/state.json) — e.g. a customer's lane whose commands and cards are not ours to send."""
+    if _private_profile():
+        return True
+    excluded = switches.state().get("shadow_exclude_profiles") or []
+    return isinstance(excluded, list) and _profile() in excluded
 
 
 def _shadow_policy(feature: str) -> str:
@@ -917,7 +926,7 @@ def _kanban_done_job(payload: Dict[str, Any]) -> None:
 def _kanban_hook(feature: str, job: Callable[[Dict[str, Any]], None]) -> Callable[..., None]:
     def hook(task_id: str = "", **extra: Any) -> None:
         try:
-            if not task_id or switches.mode(feature) == "off":
+            if not task_id or switches.mode(feature) == "off" or _shadow_excluded():
                 return None
             _drain_at_exit()
             shadowq.submit(_safe_job, feature, job, {"task_id": task_id, **{
@@ -966,6 +975,10 @@ def _gate_all_job(payload: Dict[str, Any]) -> None:
 
 def _policy_shadow_tool(tool_name: str, args: Any, session_id: str, status: Any) -> None:
     """post_tool_call: sample shell commands for the gate shadow; see new cards for the owner shadow."""
+    if tool_name not in _GATE_ALL_TOOLS and tool_name != "kanban_create":
+        return
+    if _shadow_excluded():
+        return
     if tool_name in _GATE_ALL_TOOLS and switches.mode("gate_all") == "shadow" and isinstance(args, dict):
         rate = switches.state().get("gate_all_sample", 0.2)
         rate = float(rate) if isinstance(rate, (int, float)) and not isinstance(rate, bool) else 0.2

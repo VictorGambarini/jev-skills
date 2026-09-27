@@ -149,5 +149,36 @@ class Shadows(TempHome):
         decide.assert_not_called()
 
 
+
+class Exclusions(TempHome):
+    def test_an_excluded_profile_sends_nothing(self):
+        plugin = load_plugin()
+        plugin.switches.set_mode("gate_all", "shadow", shared=True)
+        path = plugin.switches.jev_dir(True) / "state.json"
+        state = json.loads(path.read_text())
+        state.update(gate_all_sample=1, shadow_exclude_profiles=["customer"])
+        path.write_text(json.dumps(state))
+        with mock.patch.object(plugin, "_profile", return_value="customer"), \
+                mock.patch.object(plugin, "_private_profile", return_value=False), \
+                mock.patch.object(plugin.shadowq, "submit") as submit:
+            plugin._on_post_tool_call(tool_name="terminal", args={"command": "ls"}, session_id="s")
+            plugin._kanban_hook("retry", plugin._retry_job)(task_id="t_0000abcd")
+        submit.assert_not_called()
+        with mock.patch.object(plugin, "_profile", return_value="devbot"), \
+                mock.patch.object(plugin, "_private_profile", return_value=False), \
+                mock.patch.object(plugin.shadowq, "submit") as submit:
+            plugin._on_post_tool_call(tool_name="terminal", args={"command": "ls"}, session_id="s")
+        submit.assert_called_once()
+
+    def test_a_private_profile_sends_nothing(self):
+        plugin = load_plugin()
+        plugin.switches.set_mode("gate_all", "shadow", shared=True)
+        with mock.patch.object(plugin, "_private_profile", return_value=True), \
+                mock.patch.object(plugin.random, "random", return_value=0.0), \
+                mock.patch.object(plugin.shadowq, "submit") as submit:
+            plugin._on_post_tool_call(tool_name="terminal", args={"command": "ls"}, session_id="s")
+        submit.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
