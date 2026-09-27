@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__, catalog, choose, cli_decide, client, compact, key_setup, keystore, ladder, mailbox, memo, plan, rerank, replay, route, search, skillpick, spend, supervise, triage
+from . import __version__, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, plan, rerank, replay, route, search, skillpick, spend, supervise, triage
 
 
 def _stdin_json() -> Any:
@@ -892,6 +892,7 @@ A Jev failure prints {"error": code} and exits 2.""")
     p.set_defaults(func=cmd_ask)
 
     cli_decide.add_parsers(sub)
+    cli_lane.add_parsers(sub)
     return parser
 
 

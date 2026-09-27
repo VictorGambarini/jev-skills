@@ -36,6 +36,11 @@ SCRIPT_SOURCE = REPO / "hermes" / "scripts"
 PLUGINS = sorted(p.name for p in PLUGIN_SOURCE.iterdir() if (p / "plugin.yaml").is_file())
 SCRIPTS = sorted(p.name for p in SCRIPT_SOURCE.iterdir() if p.is_file() and not p.name.startswith("."))
 SKILLS = sorted(p.name for p in (REPO / "skills").iterdir() if (p / "SKILL.md").is_file())
+CLAUDE_AGENTS = sorted((REPO / "claude" / "agents").glob("*.md"))
+CLAUDE_BLOCK = REPO / "claude" / "claude-md-block.md"
+AGENT_MARKER = "managed by hermes-jev-skills"
+BLOCK_BEGIN = "<!-- hermes-jev-skills:lanes BEGIN"
+BLOCK_END = "<!-- hermes-jev-skills:lanes END -->"
 
 
 def _copytree(src: Path, dst: Path) -> None:
@@ -369,6 +374,86 @@ def install_skills(folder: Path, check: bool) -> Dict[str, object]:
     return {"folder": str(folder), "skills": SKILLS}
 
 
+# ── Claude Code: lane subagents and a delimited CLAUDE.md block ──────────────
+
+def _strip_block(text: str) -> str:
+    """The text with our delimited block (and the blank line before it) taken out."""
+    start = text.find(BLOCK_BEGIN)
+    if start < 0:
+        return text
+    end = text.find(BLOCK_END, start)
+    end = len(text) if end < 0 else end + len(BLOCK_END)
+    head, tail = text[:start].rstrip("\n"), text[end:].lstrip("\n")
+    return head + ("\n\n" if head and tail else "\n" if head else "") + tail
+
+
+def _backup(path: Path) -> str:
+    backup = path.with_name(f"{path.name}.bak-jev-{time.strftime('%Y%m%d-%H%M%S')}")
+    shutil.copy2(path, backup)
+    return str(backup)
+
+
+def install_claude(claude: Path, check: bool, with_block: bool = True) -> Dict[str, object]:
+    """Lane subagents into <claude>/agents and the lanes block into <claude>/CLAUDE.md.
+
+    Additive and removable: an agent file of the same name that this installer did not write is
+    left alone and reported; CLAUDE.md is backed up before any change, and only the text between
+    our two markers is ever written, so a person's own instructions are never touched.
+    """
+    out: Dict[str, object] = {"folder": str(claude)}
+    written: List[str] = []
+    left: Dict[str, str] = {}
+    for source in CLAUDE_AGENTS:
+        target = claude / "agents" / source.name
+        if target.exists() and AGENT_MARKER not in target.read_text(encoding="utf-8", errors="replace"):
+            left[str(target)] = "exists and was not written by this installer"
+            continue
+        if not check:
+            _copyfile(source, target)
+        written.append(str(target))
+    out["agents"] = written
+    if left:
+        out["agents_left_alone"] = left
+    if with_block:
+        path = claude / "CLAUDE.md"
+        block = CLAUDE_BLOCK.read_text(encoding="utf-8").strip() + "\n"
+        before = path.read_text(encoding="utf-8") if path.is_file() else ""
+        kept = _strip_block(before)
+        after = (kept.rstrip("\n") + "\n\n" if kept.strip() else "") + block
+        out["claude_md"] = str(path)
+        if after != before:
+            out["claude_md_change"] = "updated" if BLOCK_BEGIN in before else "added"
+            if not check:
+                if before:
+                    out["claude_md_backup"] = _backup(path)
+                path.write_text(after, encoding="utf-8")
+        else:
+            out["claude_md_change"] = "unchanged"
+    return out
+
+
+def uninstall_claude(claude: Path) -> Dict[str, object]:
+    removed = []
+    for source in CLAUDE_AGENTS:
+        target = claude / "agents" / source.name
+        if target.is_file() and AGENT_MARKER in target.read_text(encoding="utf-8", errors="replace"):
+            target.unlink()
+            removed.append(str(target))
+    out: Dict[str, object] = {"agents_removed": removed}
+    path = claude / "CLAUDE.md"
+    if path.is_file():
+        before = path.read_text(encoding="utf-8")
+        if BLOCK_BEGIN in before:
+            out["claude_md_backup"] = _backup(path)
+            after = _strip_block(before)
+            if after.strip():
+                path.write_text(after, encoding="utf-8")
+            else:
+                path.unlink()
+            out["claude_md"] = "block removed"
+    return out
+
+
 def install_cli(check: bool, hermes_home: "Path | None" = None) -> Dict[str, object]:
     target = Path.home() / ".local" / "bin" / "jev"
     not_linked: Dict[str, str] = {}
@@ -512,6 +597,8 @@ def main() -> int:
                         help="Hermes root (default: $HERMES_HOME, else ~/.hermes)")
     parser.add_argument("--enable", default="all", help="Hermes profiles to enable the plugins in: all, none, or a,b,c")
     parser.add_argument("--skills-dir", action="append", default=[], help="extra skill folder to install into")
+    parser.add_argument("--no-claude-md", action="store_true",
+                        help="Claude Code: install the lane subagents but leave ~/.claude/CLAUDE.md alone")
     args = parser.parse_args()
 
     home = Path.home()
@@ -527,6 +614,8 @@ def main() -> int:
             report["hermes"] = uninstall_hermes(hermes)
             warnings += [w for w in (lane_warning(report["hermes"]),) if w]  # type: ignore[arg-type]
         report["skills_removed"] = [str(f / n) for f in folders for n in SKILLS if _remove(f / n)]
+        if (home / ".claude").is_dir():
+            report["claude_code"] = uninstall_claude(home / ".claude")
         # Not gated on hermes.is_dir(): a lane that was deleted is still a way of naming the
         # fleet root, and its install had linked every other lane.
         cli = uninstall_cli(hermes)
@@ -540,6 +629,8 @@ def main() -> int:
             report["hermes"] = install_hermes(hermes, args.enable, args.check)
             warnings += [w for w in (lane_warning(report["hermes"]),) if w]  # type: ignore[arg-type]
         report["skill_folders"] = [install_skills(f, args.check) for f in folders]
+        if (home / ".claude").is_dir():
+            report["claude_code"] = install_claude(home / ".claude", args.check, not args.no_claude_md)
         steps = ["jev doctor", "jev setup-key   (only if the key is missing; the person pastes it in a private page)",
                  "jev models suggest --write   (only if no routing pools exist yet)"]
         if "hermes" in report:
