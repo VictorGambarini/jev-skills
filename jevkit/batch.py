@@ -116,6 +116,7 @@ def run(policy: Any, rows: List[Mapping[str, Any]], out_path: Path, *, yes: bool
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(out_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     actions: Dict[str, int] = {}
+    skipped: Dict[str, int] = {}
     errors = 0
 
     def one(row: Mapping[str, Any]) -> None:
@@ -136,6 +137,8 @@ def run(policy: Any, rows: List[Mapping[str, Any]], out_path: Path, *, yes: bool
             actions[str(decision.get("action"))] = actions.get(str(decision.get("action")), 0) + 1
             if decision.get("status") == "error":
                 errors += 1
+            elif decision.get("status") == "skipped":
+                skipped[str(decision.get("error"))] = skipped.get(str(decision.get("error")), 0) + 1
 
     try:
         if workers <= 1 or rescore:
@@ -146,5 +149,8 @@ def run(policy: Any, rows: List[Mapping[str, Any]], out_path: Path, *, yes: bool
                 list(pool.map(one, todo))
     finally:
         os.close(fd)
-    summary.update({"status": "done", "actions": dict(sorted(actions.items())), "errors": errors})
+    summary.update({"status": "done", "actions": dict(sorted(actions.items())), "errors": errors,
+                    # Rows the limiter or the privacy check never let Jev see: their action is the
+                    # policy's fallback, so a report over them measures the fallback, not Jev.
+                    "skipped": dict(sorted(skipped.items()))})
     return summary

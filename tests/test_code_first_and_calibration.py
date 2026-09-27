@@ -327,3 +327,14 @@ class PatientCallersWaitOutTheRateLimit(TempHome):
             out = engine.decide({"t": 1}, CODE_FIRST, mode="shadow", transport=fake, patient=True)
         self.assertEqual(out["error"], "skipped_budget")
         self.assertEqual(slept.call_count, 0)
+
+
+class BatchSaysWhatItSkipped(TempHome):
+    def test_budget_skips_are_counted_not_hidden(self):
+        from unittest import mock
+        rows = [{"id": str(i), "state": {"t": i}} for i in range(3)]
+        with mock.patch.object(engine.limits, "admit", return_value=(False, "skipped_budget")):
+            summary = batch.run(CODE_FIRST, rows, self.home / "out.jsonl", transport=Scripted({"worth": 0.9}),
+                                workers=1)
+        self.assertEqual(summary["skipped"], {"skipped_budget": 3})
+        self.assertEqual(summary["errors"], 0)
