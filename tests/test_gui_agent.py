@@ -213,7 +213,7 @@ class PortabilityTests(unittest.TestCase):
         was shipped: the Keychain lookup hardcoded `-a vibex`."""
         import ast
         path = REPO / "skills" / "jev-computer-use" / "scripts" / "jev_gui_agent.py"
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         # Prose may name the trap it exists to prevent; a string the code USES may not.
         # Docstrings are documentation, so they are excluded via the AST rather than by
         # guessing at comment syntax.
