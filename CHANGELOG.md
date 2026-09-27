@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Nous Portal in the model catalog** (`jev models list`, pool suggestions). models.dev has no Nous entry, so Nous-served models never reached the pools. `jev models … --refresh` now reads the Nous inference API's OpenRouter-shaped `/models` and saves it; every other read, including routing on each turn, uses the saved copy and never the network. Without a saved copy it falls back to Hermes's `provider_models_cache.json` Nous list priced from models.dev's OpenRouter entry; with neither, no Nous provider is added. `:batch` ids and variable-priced (-1) routers are dropped, and a models.dev Nous entry, if one appears, wins. **What leaves the machine:** on refresh only, the Hermes Nous login from `auth.json` (`agent_key`, then `access_token`) goes as a bearer to `inference_base_url` + `/models`, and only when that URL is plain https on `inference-api.nousresearch.com` — no userinfo, other host, port, query or fragment — and redirects are refused so the bearer cannot follow one. An unreachable or unusable endpoint leaves the saved copy untouched.
+
 ## 0.22.0 (2026-09-29)
 
 Released by the daily Jev steward: 2 commit(s) on main since v0.21.0.
