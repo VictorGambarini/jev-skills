@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`jev models suggest --provider X` builds pools from that provider only** (PR #30, thanks @brandonpollack23). The accepted flag previously filtered only `list`.
+
 ## 0.21.0 (2026-09-28)
 
 Released by the daily Jev steward: 7 commit(s) on main since v0.20.0.

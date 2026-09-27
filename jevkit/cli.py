@@ -211,10 +211,10 @@ def cmd_models(args: argparse.Namespace) -> int:
     if args.action == "providers":
         return _out({"available": catalog.available_providers(data)})
     rows = catalog.models(data)
+    if args.provider:                                  # also for suggest: pools from one provider only
+        rows = [r for r in rows if r["provider"] == args.provider]
     config = route.load_config()
     if args.action == "list":
-        if args.provider:
-            rows = [r for r in rows if r["provider"] == args.provider]
         if args.search:
             rows = [r for r in rows if args.search.lower() in (r["model"] + r["name"]).lower()]
         return _out({"count": len(rows), "models": rows})
