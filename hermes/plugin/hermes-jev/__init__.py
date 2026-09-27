@@ -804,7 +804,9 @@ def _on_post_approval_response(command: str = "", choice: str = "", session_key:
 # feature uses is `<feature>_policy` in jev/state.json (a tuned local policy can be dropped in
 # <hermes root>/jev/policies/) — the shipped one otherwise. Kill switch: <root>/jev/<FEATURE>_OFF.
 
-_SHADOW_POLICY = {"retry": "retry", "blockcheck": "blockcheck", "kanban_done": "kanban-done",
+# kanban_done ships no policy: every wording tried on one fleet's history failed (see CHANGELOG),
+# so it runs only when `kanban_done_policy` names a local one.
+_SHADOW_POLICY = {"retry": "retry", "blockcheck": "blockcheck", "kanban_done": "",
                   "owner": "owner", "gate_all": "gate-ask"}
 _GATE_ALL_TOOLS = ("terminal", "execute_code")
 _DRAIN_REGISTERED = False
@@ -919,7 +921,7 @@ def _blockcheck_job(payload: Dict[str, Any]) -> None:
 
 
 def _kanban_done_job(payload: Dict[str, Any]) -> None:
-    if switches.mode("kanban_done") == "off":
+    if switches.mode("kanban_done") == "off" or not _shadow_policy("kanban_done"):
         return
     task, _runs = _kanban_rows(str(payload["task_id"]), payload.get("board"))
     state = {"card_title": str(getattr(task, "title", "") or "")[:200],
