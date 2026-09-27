@@ -15,6 +15,46 @@ You stay the planner and the hands. Jev is only the fast "which one next?" in th
 
 Web pages belong to `jev-browser-use`. This skill is for desktop apps and OS surfaces, driven through whatever computer-use driver you have (CUA Driver over MCP, the platform's native computer-use tool, an accessibility bridge).
 
+## First choice on a Mac: Co-Agent does the loop for you
+
+If Co-Agent is installed (its engine answers on `http://127.0.0.1:8792`), let it drive.
+It already holds the Mac's Accessibility and Screen Recording permissions, runs this same
+loop natively (fresh observation, Jev picks one id from a closed menu, one action, a new
+observation to verify) and adds what hand-built loops kept getting wrong:
+
+- it hit-tests every click and brings a covered window forward (or refuses with
+  `occluded`), instead of clicking whatever app is really on top;
+- it reads apps with no accessibility tree (Epic Games Launcher, games, canvases) with
+  on-device OCR, and clicks them in a way Unreal and WebKit accept;
+- it applies the owner's policy per action with no dialog for ordinary input, and answers
+  `needs_approval` with a ticket at once for purchases, deleting, sending, legal
+  acceptance, sign-in and security settings; it never types credentials;
+- it names a lock screen or a macOS permission prompt as `blocked` instead of hanging.
+
+Agents with MCP use its tools `computer_status`, `computer_observe`, `computer_act` and
+`computer_run`. Agents that shell out use the bundled client:
+
+```bash
+python3 <this skill>/scripts/coagent_cu.py setup --name "Hermes"      # once per machine user
+python3 <this skill>/scripts/coagent_cu.py status
+python3 <this skill>/scripts/coagent_cu.py run --app "System Settings" --open \
+  --goal "Open the Appearance settings pane" --expect-text Appearance
+python3 <this skill>/scripts/coagent_cu.py run --app Safari \
+  --goal "Fill in the profile form and save it" \
+  --input "Full name=Ada Lovelace" --input "Email address=ada@example.com" --expect-text "Thanks Ada"
+python3 <this skill>/scripts/coagent_cu.py click --app "Epic Games Launcher" --target Library --near "top bar"
+```
+
+Always give `--expect-text` (or `--expect-title`) so success is checked, not assumed. Put
+text to enter in `--input`; it is typed only into a field whose label matches. Exit codes:
+0 done, 3 needs approval (nothing happened: tell the person what it wants and stop; do
+not look for another way to do it), 4 not verified / stalled / loop, 5 blocked (say what
+blocks it: the lock screen, the prompt's text, the missing permission), 2 usage or
+connection error. The same privacy boundary holds: Co-Agent sends Jev element ids, roles
+and short labels, never screenshots, field values or secure fields.
+
+Use the loop below yourself only when Co-Agent is not installed on the machine.
+
 ## The loop
 
 1. **Observe** with your driver. Prefer accessibility/semantic state over pixels. Every ref, capture id and coordinate is good for this observation only.
