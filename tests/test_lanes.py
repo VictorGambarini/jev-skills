@@ -299,6 +299,9 @@ class HermesShadow(TempHome):
         (self.home / "jev" / "lanes-shadow.cursor.json").unlink()
         out = lane_shadow.tick(kanban_db=db, now=now, transport=fake, apply=lambda i, t: applied.append(i) or True)
         self.assertEqual(applied, ["t_a"])
+        (self.home / "jev" / "state.json").write_text(json.dumps({"lanes": "shadow", "shadow_exclude_profiles": ["qa"]}))
+        (self.home / "jev" / "lanes-shadow.cursor.json").unlink()
+        self.assertEqual(lane_shadow.tick(kanban_db=db, now=now, transport=fake)["classified"], 0)
         (self.home / "jev" / "LANES_OFF").write_text("")
         self.assertEqual(lane_shadow.tick(kanban_db=db, now=now, transport=fake)["mode"], "off")
 

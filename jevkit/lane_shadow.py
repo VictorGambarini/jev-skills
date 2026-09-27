@@ -105,7 +105,8 @@ def tick(*, kanban_db: Optional[Path] = None, policy: str = DEFAULT_POLICY, now:
     db = Path(kanban_db) if kanban_db else root() / "kanban.db"
     cursor = _read_cursor()
     since = float(cursor.get("created_at") or now - FIRST_TICK_LOOKBACK)
-    private = set(lane_replay._private_profiles(root()))
+    # Private profiles send nothing, nor do the ones the fleet excluded from every shadow.
+    private = set(lane_replay._private_profiles(root())) | set(switches.state().get("shadow_exclude_profiles") or [])
     mapped = lanes.targets("hermes")
     cards = new_cards(db, since, limit)
     counts: Dict[str, int] = {}
