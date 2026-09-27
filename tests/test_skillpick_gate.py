@@ -227,6 +227,24 @@ class CatalogCapTests(unittest.TestCase):
         self.assertNotIn("skills_dropped", out)
 
 
+class SymlinkDiscoveryTests(unittest.TestCase):
+    def test_linked_skill_is_discovered_and_cycles_terminate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"
+            shared = Path(tmp) / "shared"
+            root.mkdir()
+            shared.mkdir()
+            (root / "local").mkdir()
+            (shared / "watch").mkdir()
+            for folder, name in ((root / "local", "local"), (shared / "watch", "watch")):
+                (folder / "SKILL.md").write_text(f"---\nname: {name}\ndescription: useful\n---\n")
+            (root / "watch").symlink_to(shared / "watch", target_is_directory=True)
+            (shared / "watch" / "loop").symlink_to(root, target_is_directory=True)
+            found = skillpick.discover([root])
+            self.assertEqual(sorted(s["name"] for s in found), ["local", "watch"])
+            self.assertEqual(next(s["path"] for s in found if s["name"] == "watch"), str(root / "watch" / "SKILL.md"))
+
+
 class FrontMatterTests(unittest.TestCase):
     """A description written as a block scalar used to reach Jev as the marker itself.
 

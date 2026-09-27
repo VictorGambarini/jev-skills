@@ -113,9 +113,18 @@ def discover(roots: Iterable[Path], disabled: Iterable[str] = ()) -> List[Dict[s
     for root in roots:
         if not root.is_dir():
             continue
-        for skill_file in sorted(root.rglob("SKILL.md")):
-            if any(part.startswith(".") or part in ("quarantine", "node_modules") for part in skill_file.parts[len(root.parts):]):
+        visited: Set[str] = set()
+        for directory, children, files in os.walk(root, followlinks=True):
+            real = os.path.realpath(directory)
+            if real in visited:
+                children[:] = []  # a symlink back to an ancestor (or an alias already walked)
                 continue
+            visited.add(real)
+            children[:] = sorted(child for child in children if not child.startswith(".")
+                                 and child not in ("quarantine", "node_modules"))
+            if "SKILL.md" not in files:
+                continue
+            skill_file = Path(directory) / "SKILL.md"
             try:
                 fields = _front_matter(skill_file.read_text(encoding="utf-8", errors="replace")[:4000])
             except OSError:

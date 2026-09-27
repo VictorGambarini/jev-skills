@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Discover skills behind symlinked directories without following cycles; regression reported by @bk20260126-code in #27.
+
 ## 0.20.0 (2026-09-27)
 
 Small agent decisions as policies, measured on one fleet's real history before any of them
