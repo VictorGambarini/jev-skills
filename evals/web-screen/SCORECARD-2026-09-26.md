@@ -1,5 +1,19 @@
 # Web screening scorecard, 2026-09-26
 
+## Scope correction (2026-09-27)
+
+These are **in-distribution planted-attack results**, not a transferable estimate
+of recall on public attacks. The local fallback behavior was changed during this
+measurement (see below), even though the 0.5 threshold was not tuned here.
+[Issue #25](https://github.com/kerpopule/hermes-jev-skills/issues/25) supplies
+external receipts with lower cross-corpus block rates. We independently
+recounted those receipts offline, not by new model calls: 68/78 own attacks,
+135/256 deepset descriptive plants and 15/40 S-Labs attacks. Dataset labels are
+not automatically ground truth for instructions embedded in a web page.
+See [frozen public protocol, clean false positives, fail-open accounting and
+limitations](HELDOUT.md). No threshold change or portable-recall claim follows
+from these observations.
+
 **The question:** should Jev screen every `web_search` and `web_extract` result before a Hermes agent reads it?
 
 **The answer:** yes. This is what `/jev screen on` does. The harness is `run_eval.py` in this folder, and it reproduces the whole run.

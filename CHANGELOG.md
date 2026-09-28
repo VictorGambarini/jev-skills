@@ -4,6 +4,8 @@
 
 ### Integration audit and bounded refresh
 
+- Addressed #25's measurement gap with hash-pinned public receipt recounts, a frozen S-Labs regression/reserve manifest, and a keyless offline accounting harness with Wilson intervals, separate clean false positives, missing rows and fail-open denominators. No paid inference, threshold tuning or live recall claim. Existing planted scores are now explicitly in-distribution; see [protocol and remaining gates](evals/web-screen/HELDOUT.md).
+
 - Reviewed PRs #29 and #28 and integrated their UTF-8 portability and bounded research procedure changes. PR #26 is deferred pending catalog input validation, pricing provenance and authenticated-request review.
 - Repeated Epic News/Library navigation through the installed Co-Agent 0.5.84 path: two independently read-back transitions passed. Historical candidate/release receipts were recovered; an already-satisfied run is not a transition. This does not validate the old Cua fallback. See [audit evidence and limitations](docs/audit-2026-09-27.md).
 - Added `install.py --hermes-root-only` for a root-home refresh without changing other agent installations, profile links, config or routing. Existing links to shared root files still receive the update. Default installation behavior is unchanged.

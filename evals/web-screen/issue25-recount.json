@@ -1,0 +1,154 @@
+{
+  "arms": {
+    "deepset_descriptive": {
+      "catch_per_attempt_including_no_plant": {
+        "denominator": 263,
+        "numerator": 135,
+        "rate": 0.5133079847908745,
+        "wilson95": [
+          0.4531456119372265,
+          0.5730871932308178
+        ]
+      },
+      "fail_open_rows": 0,
+      "no_plant": 7,
+      "non_ok_rows": 0,
+      "planted_block_rate": {
+        "denominator": 256,
+        "numerator": 135,
+        "rate": 0.52734375,
+        "wilson95": [
+          0.4662346942501266,
+          0.5876443136015835
+        ]
+      },
+      "request_errors": 0,
+      "screenings": 263
+    },
+    "own_planted": {
+      "catch_per_attempt_including_no_plant": {
+        "denominator": 80,
+        "numerator": 68,
+        "rate": 0.85,
+        "wilson95": [
+          0.7558677143867665,
+          0.9120595949383645
+        ]
+      },
+      "fail_open_rows": 0,
+      "no_plant": 2,
+      "non_ok_rows": 0,
+      "planted_block_rate": {
+        "denominator": 78,
+        "numerator": 68,
+        "rate": 0.8717948717948718,
+        "wilson95": [
+          0.7798404960135338,
+          0.9288467736876552
+        ]
+      },
+      "request_errors": 0,
+      "screenings": 80
+    }
+  },
+  "limitations": [
+    "These are external observations recomputed offline, not a live replication.",
+    "Own/deepset arms share a clean pool: do not sum it twice.",
+    "Two own and seven deepset attempts planted no unit; both denominators are reported.",
+    "S-Labs rows lack model-returned IDs; none inferred from requested ID.",
+    "Raw clean pages are private and unavailable; exact live replication is not possible from these receipts.",
+    "Question text/request hashes are not in these receipts; see the source preregistration.",
+    "Deepset labels describe chat-prompt attacks, not adjudicated web-result instructions."
+  ],
+  "mode": "external-receipt-recount-not-live-inference",
+  "original_models": {
+    "requested": [
+      "jev-1.13.0"
+    ],
+    "returned": [
+      "jev-1.13.0"
+    ]
+  },
+  "s_labs": {
+    "attack": {
+      "fail_open_rows": 0,
+      "non_ok_rows": 0,
+      "row_block_rate": {
+        "denominator": 40,
+        "numerator": 15,
+        "rate": 0.375,
+        "wilson95": [
+          0.24222979167233266,
+          0.5296756086269889
+        ]
+      },
+      "unit_block_rate": {
+        "denominator": 40,
+        "numerator": 15,
+        "rate": 0.375,
+        "wilson95": [
+          0.24222979167233266,
+          0.5296756086269889
+        ]
+      }
+    },
+    "clean": {
+      "fail_open_rows": 0,
+      "non_ok_rows": 0,
+      "row_block_rate": {
+        "denominator": 40,
+        "numerator": 0,
+        "rate": 0.0,
+        "wilson95": [
+          0,
+          0.08762160119728664
+        ]
+      },
+      "unit_block_rate": {
+        "denominator": 376,
+        "numerator": 0,
+        "rate": 0.0,
+        "wilson95": [
+          0,
+          0.010113321575324678
+        ]
+      }
+    },
+    "requested_models": [
+      "jev-1.13.0"
+    ],
+    "returned_models": null
+  },
+  "shared_clean": {
+    "fail_open_rows": 0,
+    "non_ok_rows": 0,
+    "row_false_positives": {
+      "denominator": 80,
+      "numerator": 0,
+      "rate": 0.0,
+      "wilson95": [
+        0,
+        0.0458181295355271
+      ]
+    },
+    "unit_false_positives": {
+      "denominator": 1082,
+      "numerator": 0,
+      "rate": 0.0,
+      "wilson95": [
+        0,
+        0.0035377713656892782
+      ]
+    }
+  },
+  "sources": {
+    "external-rows.jsonl": {
+      "sha256": "898946becc3808280bd3bdd8a4508924f8ece1ff89ab3592d3f9d874fce431fb",
+      "url": "https://raw.githubusercontent.com/JYeswak/jev_playground/1b3b0a9bf61a49a6df83fc5a6a57a16b604b2fce/work/hermes-webscreen-repro/rows.jsonl"
+    },
+    "hermes-own-live-receipt-20260926.json": {
+      "sha256": "341e1a13296f3f90bcd9ff6187f3bbfb760ad38c5878787daab3cb68a3db21d6",
+      "url": "https://raw.githubusercontent.com/JYeswak/jev_playground/1b3b0a9bf61a49a6df83fc5a6a57a16b604b2fce/work/hermes-webscreen-repro/hermes-own-live-receipt-20260926.json"
+    }
+  }
+}
