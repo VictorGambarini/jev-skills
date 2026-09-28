@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.21.0 (2026-09-28)
+
+Released by the daily Jev steward: 7 commit(s) on main since v0.20.0.
+
 ### Integration audit and bounded refresh
 
 - Addressed #25's measurement gap with hash-pinned public receipt recounts, a frozen S-Labs regression/reserve manifest, and a keyless offline accounting harness with Wilson intervals, separate clean false positives, missing rows and fail-open denominators. No paid inference, threshold tuning or live recall claim. Existing planted scores are now explicitly in-distribution; see [protocol and remaining gates](evals/web-screen/HELDOUT.md).
@@ -11,6 +15,19 @@
 - Added `install.py --hermes-root-only` for a root-home refresh without changing other agent installations, profile links, config or routing. Existing links to shared root files still receive the update. Default installation behavior is unchanged.
 
 - Discover skills behind symlinked directories without following cycles; regression reported by @bk20260126-code in #27.
+
+**New**
+
+- skills: add bounded social research workflow (386e057)
+
+**Changes and fixes**
+
+- Fix symlinked skill discovery without traversal cycles (45ed9d4)
+- docs: update Jev Social reference to v0.1.9 (0f73397)
+- docs: gate person-marked social evidence locally (f2c272d)
+- tests: read the runner as UTF-8 in the portability check (3a8cc8c)
+- Audit Epic transitions and PRs; add root-only installer refresh (fb4033a)
+- Freeze public webscreen regression protocol and recount transfer receipts (2cf62ba)
 
 ## 0.20.0 (2026-09-27)
 
