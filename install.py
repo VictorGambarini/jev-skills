@@ -286,8 +286,8 @@ def enable_plugins(config: Path, names: Sequence[str], enable: bool) -> Dict[str
     return status
 
 
-def install_hermes(root: Path, enable: str, check: bool) -> Dict[str, object]:
-    homes = hermes_homes(root)
+def install_hermes(root: Path, enable: str, check: bool, root_only: bool = False) -> Dict[str, object]:
+    homes = [root] if root_only else hermes_homes(root)
     if enable == "all":
         wanted = {"default"} | {h.name for h in homes[1:]}
     elif enable == "none":
@@ -599,11 +599,28 @@ def main() -> int:
     parser.add_argument("--skills-dir", action="append", default=[], help="extra skill folder to install into")
     parser.add_argument("--no-claude-md", action="store_true",
                         help="Claude Code: install the lane subagents but leave ~/.claude/CLAUDE.md alone")
+    parser.add_argument("--hermes-root-only", action="store_true",
+                        help="Refresh only the selected Hermes home; no profile links, other agents or config edits")
     args = parser.parse_args()
+    if args.hermes_root_only and (args.uninstall or args.skills_dir):
+        parser.error("--hermes-root-only cannot be combined with --uninstall or --skills-dir")
 
     home = Path.home()
     hermes = Path(args.hermes_home).expanduser() if args.hermes_home else Path(
         os.environ.get("HERMES_HOME") or str(home / ".hermes")).expanduser()
+    if args.hermes_root_only:
+        if not (hermes / "config.yaml").is_file():
+            parser.error("--hermes-root-only needs an existing Hermes home with config.yaml")
+        shim = hermes / "bin" / "jev"
+        reason = _link_command(shim, args.check)
+        report = install_hermes(hermes, "none", args.check, root_only=True)
+        warning = lane_warning(report)
+        warnings = [w for w in (reason, warning) if w]
+        print(json.dumps({"repo": str(REPO), "mode": "check" if args.check else "install",
+                          "scope": "hermes-root-only", "hermes": report,
+                          "cli": {"command": str(shim)}, "skill_folders": [],
+                          **({"warning": "; ".join(warnings)} if warnings else {})}, indent=2))
+        return 1 if warnings else 0
     folders = [Path(p).expanduser() for p in args.skills_dir]
     folders += [p for p in (home / ".claude" / "skills", home / ".codex" / "skills", home / ".agents" / "skills") if p.parent.is_dir()]
 
