@@ -162,6 +162,50 @@ class NousCatalogTests(unittest.TestCase):
                 self.assertEqual(list(data["nous"]["models"]), ["anthropic/claude-opus-4.5"])
                 self.assertEqual(json.loads(path.read_text()), [NOUS_ROW])
 
+    MALFORMED = [
+        dict(NOUS_ROW, id="bad/context", context_length="200k"),
+        dict(NOUS_ROW, id="bad/context-type", context_length=[1]),
+        dict(NOUS_ROW, id="bad/created", created=1e300),
+        dict(NOUS_ROW, id="bad/created-nan", created=float("nan")),
+        dict(NOUS_ROW, id="bad/pricing", pricing="free"),
+        dict(NOUS_ROW, id="bad/price-inf", pricing={"prompt": "inf", "completion": "1"}),
+        dict(NOUS_ROW, id="bad/architecture", architecture="text"),
+        dict(NOUS_ROW, id="bad/params", supported_parameters=3),
+        dict(NOUS_ROW, id=7), "not a row", None,
+    ]
+
+    def test_a_malformed_saved_row_is_dropped_and_catalog_reads_keep_working(self):
+        path = catalog._nous_cache_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(self.MALFORMED + [NOUS_ROW]))
+        data = catalog.load_models_dev()
+        self.assertEqual(list(data["nous"]["models"]), ["anthropic/claude-opus-4.5"])
+        self.assertIn("z/cheap", data["openrouter"]["models"])
+        self.assertEqual({row["model"] for row in catalog.models(data, providers=["nous"])},
+                         {"anthropic/claude-opus-4.5"})
+
+    def test_a_saved_copy_with_only_malformed_rows_falls_back_to_the_hermes_list(self):
+        path = catalog._nous_cache_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(self.MALFORMED))
+        (self.hermes / "provider_models_cache.json").write_text(json.dumps({"nous": {"models": ["z/cheap", ["x"]]}}))
+        data = catalog.load_models_dev()
+        self.assertEqual(list(data["nous"]["models"]), ["z/cheap"])
+
+    def test_a_reply_of_only_malformed_rows_does_not_replace_the_saved_copy(self):
+        path = catalog._nous_cache_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps([NOUS_ROW]))
+        data, _ = self._refresh(return_value=Reply(json.dumps({"data": self.MALFORMED}).encode()))
+        self.assertEqual(list(data["nous"]["models"]), ["anthropic/claude-opus-4.5"])
+        self.assertEqual(json.loads(path.read_text()), [NOUS_ROW])
+
+    def test_only_valid_rows_of_a_mixed_reply_are_saved(self):
+        other = dict(NOUS_ROW, id="z/other")
+        data, _ = self._refresh(return_value=Reply(json.dumps({"data": self.MALFORMED + [other]}).encode()))
+        self.assertEqual(list(data["nous"]["models"]), ["z/other"])
+        self.assertEqual(json.loads(catalog._nous_cache_path().read_text()), [other])
+
     def test_an_unavailable_endpoint_with_no_saved_copy_falls_back_to_the_hermes_list(self):
         (self.hermes / "provider_models_cache.json").write_text(json.dumps({"nous": {"models": ["z/cheap"]}}))
         data, opened = self._refresh(side_effect=urllib.error.URLError("down"))

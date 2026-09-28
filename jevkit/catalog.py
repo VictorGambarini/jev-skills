@@ -70,6 +70,11 @@ def _load_models_dev(refresh: bool) -> Dict[str, Any]:
 # is fetched only on refresh (routing reads this catalog on every turn and must not touch the
 # network); otherwise the saved copy is used, and failing that Hermes's cached Nous model
 # list priced from models.dev's OpenRouter entry.
+#
+# Pricing provenance: from /models (fresh or saved) the prices are Nous's own. In the Hermes
+# fallback they are OpenRouter's list prices for the same model ids, as models.dev records
+# them: an estimate of what Nous charges, not a Nous quote. Ids OpenRouter does not price are
+# left out rather than guessed.
 
 NOUS_ID = "nous"
 # The only hosts the Hermes Nous login is ever sent to. auth.json is not ours; a base URL in it
@@ -129,34 +134,45 @@ def _fetch_nous() -> Optional[List[Dict[str, Any]]]:
                 rows = json.loads(response.read(20_000_000)).get("data")
         except (OSError, ValueError, AttributeError):
             continue
-        if isinstance(rows, list) and rows:
+        # Only rows that make a usable spec replace the saved copy; a reply with none leaves it be.
+        usable = [row for row in rows if _nous_row_id(row) and _nous_spec(row)] if isinstance(rows, list) else []
+        if usable:
             path = _nous_cache_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(rows), encoding="utf-8")
-            return rows
+            path.write_text(json.dumps(usable), encoding="utf-8")
+            return usable
     return None
 
 
+def _nous_row_id(row: Any) -> Optional[str]:
+    model = row.get("id") if isinstance(row, dict) else None
+    return model if isinstance(model, str) and model and not model.endswith(":batch") else None
+
+
 def _nous_spec(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """One Nous /models row in models.dev's shape. Prices there are dollars per token."""
-    pricing = row.get("pricing") or {}
+    """One Nous /models row in models.dev's shape, or None if the row is malformed.
+
+    Prices there are dollars per token. The row comes from the network or a saved file, so
+    any field may be the wrong type; a bad row is dropped, never raised.
+    """
     try:
+        pricing = row.get("pricing") or {}
         cost = {"input": float(pricing["prompt"]) * 1e6, "output": float(pricing["completion"]) * 1e6}
-    except (KeyError, TypeError, ValueError):
+        if not (0 <= cost["input"] < float("inf") and 0 <= cost["output"] < float("inf")):
+            return None                               # OpenRouter marks variable-priced routers with -1
+        architecture = row.get("architecture") or {}
+        params = row.get("supported_parameters") or []
+        created = row.get("created")
+        return {
+            "name": str(row.get("name") or row.get("id")), "cost": cost,
+            "limit": {"context": int(row.get("context_length") or 0)},
+            "modalities": {"input": list(architecture.get("input_modalities") or ["text"]),
+                           "output": list(architecture.get("output_modalities") or ["text"])},
+            "tool_call": "tools" in params, "reasoning": "reasoning" in params,
+            "release_date": time.strftime("%Y-%m-%d", time.gmtime(created)) if isinstance(created, (int, float)) else "",
+        }
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, OSError):
         return None
-    if cost["input"] < 0 or cost["output"] < 0:       # OpenRouter marks variable-priced routers with -1
-        return None
-    architecture = row.get("architecture") or {}
-    params = row.get("supported_parameters") or []
-    created = row.get("created")
-    return {
-        "name": row.get("name") or row.get("id"), "cost": cost,
-        "limit": {"context": int(row.get("context_length") or 0)},
-        "modalities": {"input": architecture.get("input_modalities") or ["text"],
-                       "output": architecture.get("output_modalities") or ["text"]},
-        "tool_call": "tools" in params, "reasoning": "reasoning" in params,
-        "release_date": time.strftime("%Y-%m-%d", time.gmtime(created)) if isinstance(created, (int, float)) else "",
-    }
 
 
 def _nous_models(catalog: Dict[str, Any], refresh: bool) -> Dict[str, Any]:
@@ -167,16 +183,21 @@ def _nous_models(catalog: Dict[str, Any], refresh: bool) -> Dict[str, Any]:
         except (OSError, json.JSONDecodeError):
             rows = None
     if isinstance(rows, list):
-        specs = {row["id"]: _nous_spec(row) for row in rows if isinstance(row, dict) and row.get("id")}
-        return {model: spec for model, spec in specs.items() if spec and not model.endswith(":batch")}
-    # No Nous copy yet: Hermes's model list, priced as OpenRouter prices the same ids.
+        specs = {_nous_row_id(row): _nous_spec(row) for row in rows if _nous_row_id(row)}
+        found = {model: spec for model, spec in specs.items() if spec}
+        if found:
+            return found
+    # No usable Nous copy: Hermes's model list, priced as OpenRouter prices the same ids (an
+    # estimate; see "Pricing provenance" above).
     try:
         listed = json.loads((hermes_home() / "provider_models_cache.json").read_text(encoding="utf-8"))
         names = (listed.get(NOUS_ID) or {}).get("models") or []
     except (OSError, json.JSONDecodeError, AttributeError):
         return {}
     openrouter = (catalog.get("openrouter") or {}).get("models") or {}
-    return {name: openrouter[name] for name in names if name in openrouter}
+    if not isinstance(names, list) or not isinstance(openrouter, dict):
+        return {}
+    return {name: openrouter[name] for name in names if isinstance(name, str) and name in openrouter}
 
 
 def _with_nous(catalog: Dict[str, Any], refresh: bool) -> Dict[str, Any]:
