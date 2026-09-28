@@ -1,5 +1,9 @@
 # Stage 2 scorecard, 2026-09-22
 
+This is the historical ten-skill, 14-case run. Commit
+`f8dd9afb49aa4bf156d917aaf50c61209459d24b` preserves the exact script and catalog used for
+the numbers below; the current script may contain later skills and authored cases.
+
 Does skill selection's second request earn its ~500 ms, or would stage 1 alone do? Measured,
 and the answer is that **stage 2 stays**. Method and the script that reproduces it:
 `scripts/calibrate_skill_stage2.py`.
@@ -88,6 +92,7 @@ cases from the confident-right ones on a set bigger than 14.
 ## Reproduce
 
 ```bash
+git checkout f8dd9afb49aa4bf156d917aaf50c61209459d24b
 python3 scripts/calibrate_skill_stage2.py                       # this repo's 10 skills
 python3 scripts/calibrate_skill_stage2.py --runs 2 \
     --root ~/.hermes/skills --root ~/.hermes/shared-skills --root ./skills   # a real catalog

@@ -21,7 +21,7 @@ authored case carries the expectation with it. The caveat travels with the numbe
 expectations are one agent's judgement, so this measures agreement with a written intent,
 not ground truth.
 
-    python3 scripts/calibrate_skill_stage2.py            # ~14 merged + 14 verified calls
+    python3 scripts/calibrate_skill_stage2.py            # ~15 merged + 15 verified calls
     python3 scripts/calibrate_skill_stage2.py --runs 3 --json /tmp/skill-stage2.json
 """
 from __future__ import annotations
@@ -46,6 +46,7 @@ CASES = [
     {"turn": "the filtered memory results came back mostly noise, thin them out for me", "expect": "jev-memory"},
     {"turn": "run this search and tell me which three results are actually worth opening", "expect": "jev-search"},
     {"turn": "click through the checkout flow in the browser and confirm each step", "expect": "jev-browser-use"},
+    {"turn": "research how creators discuss coding agents on Instagram, open posts and comments, and return a source-linked evidence report", "expect": "jev-social-research"},
     {"turn": "open System Settings on this Mac and switch the display resolution", "expect": "jev-computer-use"},
     {"turn": "should this turn go to the cheap model or the big one?", "expect": "jev-model-routing"},
     {"turn": "Jev says no_key, walk me through getting the key set up again", "expect": "jev-setup"},

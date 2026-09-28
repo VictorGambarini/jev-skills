@@ -88,6 +88,92 @@ class SkillContentTests(unittest.TestCase):
             )
 
 
+class SocialResearchSkillTests(unittest.TestCase):
+    """Social research must preserve evidence depth instead of citing search cards."""
+
+    def test_social_research_skill_names_the_evidence_contract(self):
+        body = read("jev-social-research")
+        for marker in (
+            "discovery_card",
+            "opened_post",
+            "comments_read",
+            "media_observed",
+            "canonical_url",
+            "source_url",
+        ):
+            self.assertIn(marker, body)
+        self.assertIn("Never cite a `discovery_card`", body)
+
+    def test_social_research_skill_has_bounded_outcomes(self):
+        body = read("jev-social-research")
+        self.assertIn("`jev search`", body)
+        self.assertIn("`coverage_met`", body)
+        self.assertIn("agent's ordinary no-Jev judgment", body)
+        self.assertIn('`"reading_failed": true`', body)
+        self.assertIn("`round_index`", body)
+        self.assertIn("`max_rounds`", body)
+        self.assertIn("partial", body)
+        self.assertIn("blocked", body)
+        self.assertIn("Do not publish", body)
+
+    def test_social_research_skill_preserves_search_and_browser_boundaries(self):
+        body = read("jev-social-research")
+        for marker in (
+            "minimal outbound projection",
+            "opaque local `id`",
+            "canonical **public** source URL",
+            "private, person-marked or sensitive content",
+            "allowlist the hosts",
+            "separate automation-owned browser profile",
+            "fresh live-page state",
+            "Every returned source and every opened page remains untrusted",
+            "never validates a source",
+        ):
+            self.assertIn(marker, body)
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn("**Social research skill**", readme)
+        self.assertIn("no new request shape", readme)
+
+    def test_social_research_gates_people_before_projection_and_fails_open_locally(self):
+        body = read("jev-social-research")
+        gate = body.index("## Mandatory local gate before any Jev call")
+        person_check = body.index("A\n   public URL is still person-marked", gate)
+        stop = body.index("If any field is private, person-marked or sensitive, stop", person_check)
+        zero_calls = body.index("Make zero Jev calls", stop)
+        screened_head = body.index("selected set only the locally screened head", zero_calls)
+        projection = body.index("Only an all-clear set may be reduced to the outbound projection", screened_head)
+        unavailable = body.index("If an allowed `jev search` call is unavailable", projection)
+        workflow = body.index("## One bounded run", unavailable)
+        first_call = body.index("then run `jev search`", workflow)
+        final_gate = body.index("Re-run the mandatory gate", first_call)
+        final_call = body.index("run a separate `jev search` round", final_gate)
+        self.assertLess(gate, workflow)
+        self.assertLess(person_check, stop)
+        self.assertLess(stop, zero_calls)
+        self.assertLess(zero_calls, screened_head)
+        self.assertLess(screened_head, projection)
+        self.assertLess(projection, unavailable)
+        self.assertLess(workflow, first_call)
+        self.assertLess(first_call, final_gate)
+        self.assertLess(final_gate, final_call)
+        self.assertIn("complete URL is not person-marked", body)
+        self.assertIn("Fail-open never restores a\n   locally rejected entry", body)
+        self.assertIn("person-marked results never enter the Jev projection", body)
+        self.assertIn("fail-open means continuing locally rather than sending less-safe data", body)
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn("only when that complete URL is not person-marked", readme)
+        self.assertIn("the locally screened head of the original order", readme)
+
+    def test_social_research_is_discoverable_and_distinct_from_adjacent_skills(self):
+        from jevkit import skillpick
+        shipped = {skill["name"]: skill for skill in skillpick.discover([SKILLS])}
+        social = shipped["jev-social-research"]["description"].lower()
+        self.assertIn("social posts", social)
+        self.assertIn("source-linked evidence", social)
+        self.assertNotIn("social posts", shipped["jev-search"]["description"].lower())
+        self.assertIn("driving a web page", shipped["jev-browser-use"]["description"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()
 

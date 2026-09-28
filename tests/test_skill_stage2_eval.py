@@ -49,6 +49,13 @@ class StageTwoEvalTests(unittest.TestCase):
         self.assertGreaterEqual(len(none_cases), 4)
         self.assertGreaterEqual(len(self.script.CASES) - len(none_cases), 8)
 
+    def test_social_research_and_both_adjacent_cases_are_calibrated(self):
+        expected = {case["expect"] for case in self.script.CASES}
+        self.assertTrue(
+            {"jev-social-research", "jev-search", "jev-browser-use"} <= expected,
+            "the overlapping skills need side-by-side picker cases",
+        )
+
     def test_the_scorecard_records_the_decision_and_its_numbers(self):
         text = SCORECARD.read_text(encoding="utf-8")
         self.assertIn("Stage 2 stays", text)
