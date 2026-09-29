@@ -601,7 +601,11 @@ def main() -> int:
                         help="Claude Code: install the lane subagents but leave ~/.claude/CLAUDE.md alone")
     parser.add_argument("--hermes-root-only", action="store_true",
                         help="Refresh only the selected Hermes home; no profile links, other agents or config edits")
+    parser.add_argument("--search-browser-only", action="store_true",
+                        help="With --hermes-root-only, install only the opt-in Search module; preserve skills and other modules")
     args = parser.parse_args()
+    if args.search_browser_only and not args.hermes_root_only:
+        parser.error("--search-browser-only requires --hermes-root-only")
     if args.hermes_root_only and (args.uninstall or args.skills_dir):
         parser.error("--hermes-root-only cannot be combined with --uninstall or --skills-dir")
 
@@ -611,6 +615,16 @@ def main() -> int:
     if args.hermes_root_only:
         if not (hermes / "config.yaml").is_file():
             parser.error("--hermes-root-only needs an existing Hermes home with config.yaml")
+        if args.search_browser_only:
+            folder = hermes / "plugins" / "hermes-jev" / "jevkit"
+            target = folder / "search_browser.py"
+            if not (folder / "__init__.py").is_file() or any(p.is_symlink() for p in (folder, folder.parent, folder.parent.parent, target)):
+                parser.error("Search-only install needs an existing nonsymlink root plugin")
+            if not args.check:
+                _copyfile(REPO / "jevkit" / "search_browser.py", target)
+            print(json.dumps({"mode": "check" if args.check else "install", "scope": "search-browser-only",
+                              "target": str(target), "enabled": False, "skills_changed": False}))
+            return 0
         shim = hermes / "bin" / "jev"
         reason = _link_command(shim, args.check)
         report = install_hermes(hermes, "none", args.check, root_only=True)
