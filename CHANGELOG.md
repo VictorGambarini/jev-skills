@@ -2,9 +2,21 @@
 
 ## Unreleased
 
+## 0.22.0 (2026-09-29)
+
+Released by the daily Jev steward: 2 commit(s) on main since v0.21.0.
+
 - Optional Search/WebKit test-world Python backend, not a CDP replacement or default route: explicit consent and build pin, owned isolated lifecycle, Jev-selected prevalidated actions, stale/replay rejection and observed-effect receipts. Synthetic loopback scope only; see [limits and real test command](docs/search-browser.md). Added a module-only root installer that preserves other installed modules and skills.
 
 - **`jev models suggest --provider X` builds pools from that provider only** (PR #30, thanks @brandonpollack23). The accepted flag previously filtered only `list`.
+
+**New**
+
+- Add opt-in isolated Search WebKit backend with effect receipts (f9d61d8)
+
+**Changes and fixes**
+
+- cli: jev models suggest --provider builds pools from one provider (89b073f)
 
 ## 0.21.0 (2026-09-28)
 
