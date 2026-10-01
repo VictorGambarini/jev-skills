@@ -33,6 +33,45 @@ DEFAULT_LEVELS = ("low", "medium", "high", "xhigh")
 
 _LEVEL_RE = re.compile(r"^[a-z]+$")
 
+# Routing's tier is a probability-MASS judgement; the effort pick reads the single largest
+# bucket. They can disagree: a turn routing called medium can still have trivial as its
+# argmax bucket. When they do, the effort must not undercut the tier — otherwise a turn
+# routing considered real work gets the cheapest thinking budget. Measured on a live fleet:
+# a tool-needing turn landed on effort "none" and the model answered in one line without
+# calling a single tool.
+TIER_FLOORS = {"simple": 0, "medium": 1, "hard": 2}
+
+
+def tier_floor(tier: Any) -> int:
+    """The lowest difficulty bucket an effort pick may use for a routed tier."""
+    return TIER_FLOORS.get(tier, 0) if isinstance(tier, str) else 0
+
+
+def min_bucket_for(decision: Optional[Mapping[str, Any]], config: Optional[Mapping[str, Any]] = None) -> int:
+    """The effort floor for one routing decision: the tier floor, plus a floor for doubt.
+
+    A kept decision (tier None) still carries answers, and an unsure difficulty answer —
+    the same low confidence that made routing refuse to switch models — must not buy the
+    OFF switch for thinking either: "unsure is not hard" cuts both ways, and a flat
+    spread can argmax onto trivial by a hair. A confident trivial turn still gets bucket 0.
+    """
+    if not isinstance(decision, Mapping):
+        return 0                       # anything but a decision object floors nothing
+    floor = tier_floor(decision.get("tier"))
+    if floor >= 1:
+        return floor
+    try:
+        confidence = float(decision.get("answers", {}).get("difficulty", {}).get("confidence", 1.0))
+    except (TypeError, ValueError, AttributeError):
+        return floor
+    threshold = 0.6
+    if isinstance(config, Mapping):
+        try:
+            threshold = float(config.get("min_confidence", threshold))
+        except (TypeError, ValueError):
+            pass
+    return 1 if confidence < threshold else floor
+
 
 def levels_from_config(config: Optional[Mapping[str, Any]]) -> Optional[tuple]:
     """The configured difficulty→level table, or None when effort routing is off/invalid.
@@ -65,7 +104,8 @@ def levels_from_config(config: Optional[Mapping[str, Any]]) -> Optional[tuple]:
     return table
 
 
-def pick(answers: Optional[Mapping[str, Any]], *, levels: Optional[tuple] = None) -> Optional[str]:
+def pick(answers: Optional[Mapping[str, Any]], *, levels: Optional[tuple] = None,
+         min_bucket: int = 0) -> Optional[str]:
     """The effort level this turn's difficulty answer buys, or None to leave the request alone.
 
     ``answers`` is the same object ``route.decide`` consumed: a mapping with a ``difficulty``
@@ -98,6 +138,10 @@ def pick(answers: Optional[Mapping[str, Any]], *, levels: Optional[tuple] = None
             bucket = int(round(score))
     else:
         bucket = int(round(score))
-    bucket = min(3, max(0, bucket))
+    try:
+        floor = int(min_bucket)
+    except (TypeError, ValueError):
+        floor = 0
+    bucket = min(3, max(0, max(floor, bucket)))
     level = table[bucket]
     return level if _LEVEL_RE.match(level) else None

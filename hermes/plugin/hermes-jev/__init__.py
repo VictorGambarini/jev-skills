@@ -510,14 +510,18 @@ def _on_llm_request(request: Optional[Dict[str, Any]] = None, session_id: str = 
             caps = config.get("effort", {}).get("models", {})
             supported = caps.get(model_key) if isinstance(caps, dict) else None
             if levels is not None and isinstance(supported, list) and supported:
-                candidate = effort.pick(decision.get("answers"), levels=levels)
+                # The tier routing chose floors the effort pick: routing reads probability
+                # mass, the pick reads the argmax bucket, and the two can disagree. An
+                # unsure (low-confidence) kept decision floors too — doubt never buys "off".
+                candidate = effort.pick(decision.get("answers"), levels=levels,
+                                        min_bucket=effort.min_bucket_for(decision, config))
                 if candidate in supported and candidate in effort.KNOWN_LEVELS:
                     effort_level = candidate
         except (TypeError, ValueError, AttributeError):
             pass  # Invalid opt-in fails open without changing the outgoing request.
         if effort_level:
             _log({"kind": "effort", "mode": mode, "level": effort_level,
-                  "model": model_key})
+                  "tier": decision.get("tier"), "model": model_key})
             turn["effort"] = effort_level
     if not applied:
         if effort_level:
