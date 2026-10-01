@@ -199,6 +199,20 @@ def _reachable_skill(name: str) -> Optional[str]:
         return None
     return str(loaded.get("name") or name)
 
+def _skill_failure_code(picked: Dict[str, Any]) -> Optional[str]:
+    """Diagnose fail-open without logging arbitrary reason text, prompts or errors."""
+    if picked.get("status") != "fail_open":
+        return None
+    reason = picked.get("reason")
+    known = {"no skills": "no_skills", "turn looks sensitive; not sent": "sensitive_turn"}
+    for code in ("no_key", "network", "timeout", "malformed", "invalid_response",
+                 "invalid_endpoint", "state_too_large", "response_too_large", "rate_limited"):
+        known[f"Jev unavailable ({code})"] = code
+    if isinstance(reason, str) and reason.startswith("stage 1 incomplete (batches "):
+        return "stage_one_incomplete"
+    return known.get(reason, "other") if isinstance(reason, str) else "other"
+
+
 def _on_pre_llm_call(session_id: str = "", turn_id: Any = None, user_message: Any = "", **_: Any) -> Any:
     text = user_message if isinstance(user_message, str) else json.dumps(user_message, default=str)[:6000]
     with _LOCK:
@@ -238,7 +252,8 @@ def _on_pre_llm_call(session_id: str = "", turn_id: Any = None, user_message: An
             return None
         picked = skillpick.pick(text, skills, top_k=1)
     _log({"kind": "skill", "status": picked.get("status"), "needs_skill": picked.get("needs_skill"),
-          "picked": [s["name"] for s in picked.get("skills", [])], "latency_ms": picked.get("latency_ms")})
+          "picked": [s["name"] for s in picked.get("skills", [])], "latency_ms": picked.get("latency_ms"),
+          "reason_code": _skill_failure_code(picked)})
     if not picked.get("skills"):
         return None
     skill = picked["skills"][0]
@@ -510,14 +525,18 @@ def _on_llm_request(request: Optional[Dict[str, Any]] = None, session_id: str = 
             caps = config.get("effort", {}).get("models", {})
             supported = caps.get(model_key) if isinstance(caps, dict) else None
             if levels is not None and isinstance(supported, list) and supported:
-                candidate = effort.pick(decision.get("answers"), levels=levels)
+                # The tier routing chose floors the effort pick: routing reads probability
+                # mass, the pick reads the argmax bucket, and the two can disagree. An
+                # unsure (low-confidence) kept decision floors too — doubt never buys "off".
+                candidate = effort.pick(decision.get("answers"), levels=levels,
+                                        min_bucket=effort.min_bucket_for(decision, config))
                 if candidate in supported and candidate in effort.KNOWN_LEVELS:
                     effort_level = candidate
         except (TypeError, ValueError, AttributeError):
             pass  # Invalid opt-in fails open without changing the outgoing request.
         if effort_level:
             _log({"kind": "effort", "mode": mode, "level": effort_level,
-                  "model": model_key})
+                  "tier": decision.get("tier"), "model": model_key})
             turn["effort"] = effort_level
     if not applied:
         if effort_level:

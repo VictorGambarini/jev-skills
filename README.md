@@ -163,3 +163,7 @@ MIT ([LICENSE](LICENSE)). Work ported or borrowed from other MIT projects is lis
 Jev and TypeSafe are products of TypeSafe AI; this project is independent.
 
 Contributions are welcome and keep their author in the git history. People whose work is in a release are named in [CHANGELOG.md](CHANGELOG.md).
+
+## Star history
+
+[![GitHub star history for Hermes Jev Skills](https://api.star-history.com/svg?repos=kerpopule/hermes-jev-skills&type=Date)](https://www.star-history.com/#kerpopule/hermes-jev-skills&Date)

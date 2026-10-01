@@ -445,10 +445,32 @@ def _config_fingerprint(config: Mapping[str, Any]) -> str:
     return hashlib.sha256(material.encode("utf-8", "replace")).hexdigest()[:16]
 
 
+def _sticky_side(context_tokens: int, config: Optional[Mapping[str, Any]]) -> bool:
+    """Which side of the large-context guard this turn is on.
+
+    The context BUCKET alone is too coarse to carry the guard: with
+    `sticky_context_tokens` at 50,000 the 64,000 bucket edge puts 49,999 and 50,001 in
+    the same class, and `_remember` caches the SWITCH decision (it has a tier), so the
+    first sub-guard turn poisons every later over-guard turn — a session growing past
+    the guard keeps switching models. Keying the guard's own boundary keeps the cache
+    useful and the guard honest.
+    """
+    try:
+        threshold = int((config or {}).get("sticky_context_tokens",
+                                           DEFAULT_CONFIG["sticky_context_tokens"]))
+    except (TypeError, ValueError):
+        threshold = DEFAULT_CONFIG["sticky_context_tokens"]
+    # MUST match the guard in decide() exactly (`context_tokens > threshold`), or the
+    # two disagree at the boundary and a cached sub-guard decision leaks across it.
+    return context_tokens > threshold
+
+
 def _cache_key(ask: str, profile: Optional[str], only_provider: Optional[str], has_images: bool, pinned: bool,
                context_tokens: int = 0, config: Optional[Mapping[str, Any]] = None) -> str:
     material = "\x00".join([ask, str(profile), str(only_provider), str(has_images), str(pinned), POLICY_VERSION,
-                            str(_context_bucket(context_tokens)), _config_fingerprint(config or {})])
+                            str(_context_bucket(context_tokens)),
+                            str(_sticky_side(context_tokens, config)),
+                            _config_fingerprint(config or {})])
     return hashlib.sha256(material.encode("utf-8", "replace")).hexdigest()
 
 
@@ -491,6 +513,43 @@ def _keep(current: Optional[str], reason: str, answers: Optional[Mapping[str, An
         out["answers"] = {k: v for k, v in answers.items()}
     out.update(extra)
     return out
+
+
+def _large_context_verdict(current: Optional[str], picked: Optional[str], context_tokens: int,
+                           by_ref: Dict[str, Dict[str, Any]], config: Mapping[str, Any], *,
+                           answers: Optional[Mapping[str, Any]] = None,
+                           private: bool = False) -> Optional[Dict[str, Any]]:
+    """A keep-decision when this turn is too large to switch models, else None.
+
+    Two reasons, checked in this order:
+
+    * both prices known and the pick is CHEAPER — rebuilding the prompt cache on a new
+      model costs more than the switch saves;
+    * either price unknown — the ref is not in the models.dev catalog, which is every
+      local relay (`omniproxy:*` and friends). The priced comparison above cannot run,
+      and before this existed it simply did not, so the guard stopped guarding: every
+      large-context turn still switched. A switch re-reads the whole history on a cold
+      cache, which measured SLOWER on a relay that bills per request — where the money
+      is identical either way. Fail safe: keep the model. Effort routing still applies,
+      because `_keep` carries the answers out.
+    """
+    if not current or not picked or picked == current:
+        return None
+    try:
+        threshold = config["sticky_context_tokens"]
+    except (KeyError, TypeError):
+        threshold = DEFAULT_CONFIG["sticky_context_tokens"]
+    if not context_tokens > threshold:
+        return None
+    current_price = (by_ref.get(current) or {}).get("price")
+    picked_price = (by_ref.get(picked) or {}).get("price")
+    if current_price is not None and picked_price is not None:
+        if picked_price < current_price:
+            return _keep(current, "large context; switching down would cost more than it saves",
+                         answers=answers, private=private)
+        return None
+    return _keep(current, "large context; catalog-unknown refs; switching re-reads history slower",
+                 answers=answers, private=private)
 
 
 def questions() -> Dict[str, Any]:
@@ -619,12 +678,10 @@ def decide(
     if not picked:
         return _keep(current, f"no {tier} model fits this turn", answers=answers, private=private)
 
-    if current and picked != current and context_tokens > config["sticky_context_tokens"]:
-        current_price = (by_ref.get(current) or {}).get("price")
-        picked_price = (by_ref.get(picked) or {}).get("price")
-        if current_price is not None and picked_price is not None and picked_price < current_price:
-            return _keep(current, "large context; switching down would cost more than it saves",
-                         answers=answers, private=private)
+    guarded = _large_context_verdict(current, picked, context_tokens, by_ref, config,
+                                     answers=answers, private=private)
+    if guarded is not None:
+        return {**guarded, "effort_tier": tier}
 
     provider, model = picked.split(":", 1)
     return _with_escalation(_remember(cache_key, {

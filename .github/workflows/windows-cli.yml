@@ -1,0 +1,31 @@
+name: Windows CLI fallback
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-cli:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Exercise Git Bash launchers with denied symlink privileges
+        shell: bash
+        run: |
+          shim_dir="$(cygpath -u "$RUNNER_TEMP")/jev-python"
+          mkdir -p "$shim_dir"
+          printf '#!/bin/sh\nexec python "$@"\n' > "$shim_dir/python3"
+          chmod +x "$shim_dir/python3"
+          export PATH="$shim_dir:$PATH"
+          python -m unittest discover -s tests -p test_install_fallback.py -v
