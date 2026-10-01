@@ -57,7 +57,7 @@ def min_bucket_for(decision: Optional[Mapping[str, Any]], config: Optional[Mappi
     """
     if not isinstance(decision, Mapping):
         return 0                       # anything but a decision object floors nothing
-    floor = tier_floor(decision.get("tier"))
+    floor = max(tier_floor(decision.get("tier")), tier_floor(decision.get("effort_tier")))
     if floor >= 1:
         return floor
     try:

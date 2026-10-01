@@ -77,6 +77,24 @@ class SkillSuggestionCase(unittest.TestCase):
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+class SkillFailureDiagnosticsTests(SkillSuggestionCase):
+    def test_fail_open_logs_only_a_bounded_reason_code(self):
+        for reason, expected in [("Jev unavailable (timeout)", "timeout"),
+                                 ("turn looks sensitive; not sent", "sensitive_turn"),
+                                 ("no skills", "no_skills"),
+                                 ("stage 1 incomplete (batches [1])", "stage_one_incomplete"),
+                                 ("private text must never appear", "other")]:
+            with mock.patch.object(plugin, "_hermes_skill_roots", lambda: []), \
+                    mock.patch.object(plugin.skillpick, "discover", return_value=[]), \
+                    mock.patch.object(plugin.skillpick, "pick", return_value={
+                        "status": "fail_open", "reason": reason, "skills": []}):
+                self.assertIsNone(plugin._on_pre_llm_call(session_id="failure", user_message="hello"))
+            entry = [item for item in self.log() if item.get("kind") == "skill"][-1]
+            self.assertEqual(entry.get("reason_code"), expected)
+            self.assertNotIn("reason", entry)
+            self.assertNotIn("private text", json.dumps(entry))
+
+
 class UnreachableSkillTests(SkillSuggestionCase):
     def test_a_pick_hermes_refuses_is_never_suggested(self):
         """The whole point: the agent is not sent to a skill_view that fails."""

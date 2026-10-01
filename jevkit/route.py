@@ -681,7 +681,7 @@ def decide(
     guarded = _large_context_verdict(current, picked, context_tokens, by_ref, config,
                                      answers=answers, private=private)
     if guarded is not None:
-        return guarded
+        return {**guarded, "effort_tier": tier}
 
     provider, model = picked.split(":", 1)
     return _with_escalation(_remember(cache_key, {

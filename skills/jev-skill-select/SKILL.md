@@ -40,6 +40,10 @@ Measured by replaying one real week (1,188 suggestions):
 
 That is 115 repeats and 294 declined offers removed, at the cost of 8 loads. A load within five minutes is correlation, not proof the suggestion caused it.
 
+## Diagnosing fail-open
+
+The local `skill` decision-log entry now includes a bounded `reason_code`: `no_skills`, `sensitive_turn`, `stage_one_incomplete`, a recognized transport/validation code such as `timeout` or `invalid_response`, or `other`. Success records use null. Arbitrary reason text, prompts and raw exception messages are not logged. Separate intentional privacy/catalog skips from service failures before changing budgets or thresholds. Older records without this field cannot establish the cause retrospectively; keep them in an unknown bucket rather than guessing. A fail-open remains silence, not a negative skill verdict.
+
 ## Asking directly (any agent)
 
 ```bash

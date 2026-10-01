@@ -77,6 +77,16 @@ class DoubtFloorTests(unittest.TestCase):
         decision = {"tier": None, "answers": difficulty(0, confidence=0.95)}
         self.assertEqual(effort.min_bucket_for(decision, {"min_confidence": 0.6}), 0)
 
+    def test_risk_floor_survives_a_large_context_keep(self):
+        config = {**route.DEFAULT_CONFIG, "tiers": {"medium": {"general": ["relay:other"]}}}
+        answers = {"difficulty": {"score": 0.0, "confidence": 0.95, "probabilities": {0: 1.0}},
+                   "kind": {"choice": "general", "confidence": 0.95},
+                   "costly_mistake": {"noul": 0.0}}
+        decision = route.decide("review the production migration", current="relay:current",
+                                context_tokens=60000, config=config, rows=[], answers=answers)
+        self.assertFalse(decision["routed"])
+        self.assertEqual(effort.min_bucket_for(decision, config), 1)
+
     def test_the_threshold_comes_from_config(self):
         decision = {"tier": None, "answers": difficulty(0, confidence=0.70)}
         self.assertEqual(effort.min_bucket_for(decision, {"min_confidence": 0.6}), 0)

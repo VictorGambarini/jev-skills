@@ -8,9 +8,11 @@
 On Hermes it installs every plugin under hermes/plugin, the skills, and the scripts in
 hermes/scripts; --uninstall removes those and nothing else.
 
-The `jev` command is a link: one in ~/.local/bin for the person, one in the bin folder of
-every Hermes home for the agents. A file called `jev` that this installer did not make is
-never replaced and never removed; it is reported instead.
+The `jev` command is a symlink when supported, otherwise an installer-owned shell
+launcher: one in ~/.local/bin for the person, one in the bin folder of every Hermes
+home for the agents. The fallback pins this checkout and supports Git Bash on Windows
+without Developer Mode; it does not copy bin/jev into a folder that cannot find jevkit.
+A file called `jev` that this installer did not make is never replaced or removed.
 
 It never asks for, reads or prints an API key. Connecting the key is a separate,
 private step: `jev setup-key`.
@@ -22,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -64,7 +67,15 @@ def _link(target: Path, link: Path) -> None:
         link.unlink()
     elif link.is_dir():
         shutil.rmtree(link)
-    link.symlink_to(target)
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except OSError:
+        # These paths are installer-owned plugin/skill names, not arbitrary PATH files.
+        # Copies keep profile installs usable on Windows without Developer Mode.
+        if target.is_dir():
+            _copytree(target, link)
+        else:
+            _copyfile(target, link)
 
 
 def _remove(path: Path) -> bool:
@@ -77,10 +88,26 @@ def _remove(path: Path) -> bool:
     return False
 
 
+def _command_wrapper() -> str:
+    """A relocatable lane launcher, pinned to this checkout rather than its own bin folder.
+
+    Git Bash can execute this without Windows symlink privileges. Convert a native
+    Windows path with cygpath when available; POSIX paths need no conversion.
+    """
+    return ("#!/bin/sh\n# managed by hermes-jev-skills: command fallback v1\n"
+            f"target={shlex.quote(str(JEV))}\n"
+            'if command -v cygpath >/dev/null 2>&1; then\n'
+            '    target="$(cygpath -u "$target")" || exit 1\n'
+            'fi\nexec "$target" "$@"\n')
+
+
 def _is_ours(link: Path) -> bool:
-    """True only for a symlink that resolves into this checkout, whether or not its target still exists."""
+    """Only checkout-owned symlinks or exact generated fallback launchers are ours."""
     if not link.is_symlink():
-        return False
+        try:
+            return link.is_file() and link.read_text(encoding="utf-8") == _command_wrapper()
+        except (OSError, UnicodeError):
+            return False
     try:
         target = link.resolve()
     except (OSError, RuntimeError):            # a symlink loop: RuntimeError before Python 3.13
@@ -113,13 +140,23 @@ def _link_command(link: Path, check: bool) -> "str | None":
             if os.readlink(link) == str(JEV):
                 return None                    # already right, so a second install rewrites nothing
         elif link.exists():
+            if _is_ours(link):
+                return None                    # an exact owned fallback is already usable
             return ("is a folder" if link.is_dir() else "is a file") + " this installer did not put there"
         if check:
             return None if _can_write(link.parent) else f"cannot be linked: {link.parent} is not a writable folder"
         link.parent.mkdir(parents=True, exist_ok=True)
         if link.is_symlink():
             link.unlink()                      # ours: a stale or dangling link into this checkout
-        link.symlink_to(JEV)
+        try:
+            link.symlink_to(JEV)
+        except OSError:
+            # Copying bin/jev itself cannot locate jevkit from a different bin folder.
+            # A tiny checkout-pinned wrapper works without symlink privileges. Exclusive
+            # creation refuses a file that appeared after the ownership check.
+            with link.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(_command_wrapper())
+            link.chmod(0o755)
     except OSError as exc:
         return f"could not be linked: {exc.strerror or exc}"
     return None
