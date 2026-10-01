@@ -62,7 +62,7 @@ class WorkdirKind(unittest.TestCase):
             self.assertEqual(gate.workdir_kind(str(home / "notes"), home=str(home)), "home")
         # The fixture is declared scratch explicitly: an owner may set TMPDIR to
         # a custom cache path that is intentionally absent from gate._SCRATCH.
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gate, "_SCRATCH", (tmp,)):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gate, "_SCRATCH", (str(Path(tmp).resolve()),)):
             (Path(tmp) / ".git").mkdir()
             self.assertEqual(gate.workdir_kind(tmp, home="/nonexistent-home"), "scratch")  # disposable wins
         self.assertEqual(gate.workdir_kind("/tmp", home="/nonexistent-home"), "scratch")
