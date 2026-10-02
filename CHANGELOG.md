@@ -2,12 +2,24 @@
 
 ## Unreleased
 
+## 0.22.1 (2026-10-02)
+
+Released by the daily Jev steward: 5 commit(s) on main since v0.22.0.
+
 - **Routing effort and sticky-context fixes** (PR #32, thanks @mxuanvan02): floor opt-in effort at the resolved tier, protect uncertain kept turns, guard catalog-unknown models at large context, and separate decision-cache entries across the sticky threshold. Integration regression also preserves the risk floor when the guard keeps the current model; caller effort and exact-model capability checks still win.
 - **Windows without Developer Mode** (#31, reported by @zeroappam2day): denied command symlinks fall back to a checkout-pinned, quoted Git Bash launcher rather than a broken relocated copy. Profile plugin/skill links fall back to copies. Exact owned launchers are idempotent and removable; foreign or modified files are preserved. Added offline denial/ownership/failure-path tests and a dedicated Windows Python 3.10/3.13 CI workflow.
 - **Diagnosable skill fail-open**: local logs include only a bounded `reason_code`, not arbitrary error text. Added privacy-preserving regression coverage and [sanitized usage findings and remaining limits](docs/operational-follow-up-2026-10-01.md). Historical logs cannot establish failure causes retrospectively; no live settings or thresholds changed.
 - Added a live public GitHub star-history chart at the bottom of the README.
 
 - **Nous Portal in the model catalog** (`jev models list`, pool suggestions). models.dev has no Nous entry, so Nous-served models never reached the pools. `jev models … --refresh` now reads the Nous inference API's OpenRouter-shaped `/models` and saves it; every other read, including routing on each turn, uses the saved copy and never the network. Without a saved copy it falls back to Hermes's `provider_models_cache.json` Nous list priced from models.dev's OpenRouter entry; with neither, no Nous provider is added. `:batch` ids and variable-priced (-1) routers are dropped, and a models.dev Nous entry, if one appears, wins. **What leaves the machine:** on refresh only, the Hermes Nous login from `auth.json` (`agent_key`, then `access_token`) goes as a bearer to `inference_base_url` + `/models`, and only when that URL is plain https on `inference-api.nousresearch.com` — no userinfo, other host, port, query or fragment — and redirects are refused so the bearer cannot follow one. An unreachable or unusable endpoint leaves the saved copy untouched. Rows are validated before they are saved: only rows that parse into a usable model (numeric non-negative prices, integer context, a sane `created` timestamp) replace the saved copy, a reply with none leaves it as it was, and a malformed row already on disk is dropped on read instead of breaking the catalog. **Pricing provenance:** prices from the Nous `/models` reply (fresh or saved) are Nous's own. In the Hermes fallback they are OpenRouter's list prices for the same model ids as models.dev records them — an estimate of Nous's price, not a Nous quote — and ids OpenRouter does not price are left out rather than guessed.
+
+**Changes and fixes**
+
+- catalog: add Nous Portal from its own /models (9dddc22)
+- catalog: validate Nous rows before saving; a bad row never breaks reads (4643830)
+- fix: floor the effort pick by tier and guard catalog-unknown refs at large context (685dec3)
+- Fix Windows launchers, retain kept effort floors, and document operational evidence (c889d4a)
+- Normalize scratch fixture prefixes on macOS CI (349719f)
 
 ## 0.22.0 (2026-09-29)
 
