@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A field cap of 0 or 1 now caps**: `privacy.redact` cut to `text[:limit // 2] + … + text[-(limit // 2):]`, and with `limit // 2 == 0` the tail slice is the whole text, so a `field_limits` entry of 0 or 1 sent the field in full. It now keeps no tail there.
+
 ## 0.22.1 (2026-10-02)
 
 Released by the daily Jev steward: 5 commit(s) on main since v0.22.0.
