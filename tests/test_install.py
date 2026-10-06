@@ -222,6 +222,33 @@ class HermesInstallTests(unittest.TestCase):
             install.install_skills(claude, check=False, shared=shared)   # rerun keeps the links
             self.assertTrue((claude / "jev-setup").is_symlink())
 
+    def test_shared_source_is_never_replaced_by_a_self_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = Path(tmp) / "shared"
+            for name in install.SKILLS:
+                (shared / name).mkdir(parents=True)
+                (shared / name / "SKILL.md").write_text("owned fixture")
+            install.install_skills(shared, check=False, shared=shared)
+            for name in install.SKILLS:
+                self.assertFalse((shared / name).is_symlink(), name)
+                self.assertEqual((shared / name / "SKILL.md").read_text(), "owned fixture")
+
+    def test_alias_of_shared_source_is_never_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = Path(tmp) / "shared"
+            for name in install.SKILLS:
+                (shared / name).mkdir(parents=True)
+                (shared / name / "SKILL.md").write_text("owned fixture")
+            alias = Path(tmp) / "alias"
+            try:
+                alias.symlink_to(shared, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlinks unavailable")
+            install.install_skills(alias, check=False, shared=shared)
+            for name in install.SKILLS:
+                self.assertFalse((shared / name).is_symlink(), name)
+                self.assertEqual((shared / name / "SKILL.md").read_text(), "owned fixture")
+
     def test_agent_skill_folders_are_copies_without_hermes(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp) / "skills"

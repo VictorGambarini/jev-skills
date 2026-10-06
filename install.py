@@ -415,7 +415,10 @@ def install_skills(folder: Path, check: bool, shared: "Path | None" = None) -> D
         folder.mkdir(parents=True, exist_ok=True)
         for name in SKILLS:
             if shared is not None and (shared / name / "SKILL.md").is_file():
-                _link(shared / name, folder / name)
+                target, destination = shared / name, folder / name
+                # A canonical folder or alias must never delete its own source.
+                if target.resolve() != destination.resolve():
+                    _link(target, destination)
             else:
                 _copytree(REPO / "skills" / name, folder / name)
     return {"folder": str(folder), "skills": SKILLS,
