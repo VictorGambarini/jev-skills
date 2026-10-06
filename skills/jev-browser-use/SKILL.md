@@ -24,6 +24,10 @@ Same loop as `jev-computer-use`, with page elements as regions:
 3. **Ask:** `jev choose < request.json` (Hermes: `jev_choose_action`). Schema `jev.action_choice_request_v1`; see `jev-computer-use` for the shape.
 4. **Do that one action, observe again, verify.** Never retry a browser mutation blindly: look first.
 
+**A "goal reached" row needs a second check.** Jev sees labels, not page text, so it can only guess from the link it followed that the goal is met. When it picks that row, ask a Noul over the page's own text (`jev ask`, state = goal + URL + about 6,000 characters of main text): *"From this page the visitor can do what the goal asks, now, without waiting for another person."* Measured on a request-access page reached by "Request free access": the choice said done at 0.73; the Noul said 0.07, and "a person must approve first" 0.91.
+
+**Reviewing a site as a visitor.** Run a few persona goals ("start free now", "find the plan for 5 systems") with navigation-only candidates (no typing, no submit). Each run's path, and where it stops, is the finding. A page where every step stays under the 0.65 floor is a page with no clear next step for that visitor. Log the top three probabilities with their labels, so you can see *what* it was torn between. Headless Playwright on a throwaway profile is enough for path A.
+
 ## B. Jev Ultrafast (fastest, and the default on a managed fleet that names it)
 
 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT) is a purpose-built loop with one Jev call per step. It is a separate install with its own Chrome under CDP. Run it through the bundled runner, which adds the guard rails it does not have:
@@ -35,7 +39,7 @@ python3 <this skill>/scripts/jev_browser_agent.py \
   --allow-hosts wikipedia.org --expect 'Rosetta Stone' --max-ticks 10 --json
 ```
 
-Set `JEV_ULTRAFAST_REPO` to your checkout. **The runner brings its own browser**: when no CDP endpoint is given (`--cdp`, or `BU_CDP_WS` in the environment), it launches a headless Chrome on a throwaway profile and closes it on exit, so the person's everyday browser is never attached to and never has remote debugging enabled. The result reports `"browser": "owned"` or `"attached"`. Use `--no-launch-chrome` when you require an already-attached browser instead, `--chrome-path`/`BH_CHROME_PATH` to name the binary.
+Set `JEV_ULTRAFAST_REPO` to your checkout (default `~/jev-ultrafast`). On a fleet that already pins a checkout, make that path a symlink to it rather than cloning a second one; Hermes's `fleet-jev` keeps one under `<hermes root>/shared/fleet-jev/sources/jev-ultrafast`. Without a text-model key the runner still browses read-only (it found a pricing page in 3 ticks, about 2 s) and fails only when Jev chooses to type. **The runner brings its own browser**: when no CDP endpoint is given (`--cdp`, or `BU_CDP_WS` in the environment), it launches a headless Chrome on a throwaway profile and closes it on exit, so the person's everyday browser is never attached to and never has remote debugging enabled. The result reports `"browser": "owned"` or `"attached"`. Use `--no-launch-chrome` when you require an already-attached browser instead, `--chrome-path`/`BH_CHROME_PATH` to name the binary.
 
 Exit 0 only when `--expect` is found in the live title, heading or URL; 4 unverified; 5 left the allowlist; 2 refused to start. It needs a text model key for typed values (`TEXT_MODEL_API_KEY`, OpenAI-compatible base URL in `TEXT_MODEL_BASE_URL`). Known gaps: shadow roots, iframes, canvas, file uploads, pop-up tabs. Report the gap; do not invent a DOM workaround.
 

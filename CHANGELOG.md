@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **One copy of each skill on a machine**: once Hermes is installed, Claude Code, Codex and `~/.agents` skill folders get symlinks to `<hermes root>/skills/jev/<skill>` instead of their own copies, so all three read the same files; copies remain the fallback without Hermes or symlinks. Tests cover link, re-run and no-Hermes cases.
+- **Field notes from a product review run on Jev** (`jev-browser-use`, `jev-frontier-work`, `jev-model-routing`): verify a "goal reached" pick with a Noul over page text (labels-only observation over-claimed: 0.73 vs 0.07); persona browsing as a UX review; reuse a fleet-pinned Jev Ultrafast checkout via `~/jev-ultrafast`; citation-check a delegated report's `file:line` claims with `not_enough` first; script-file `--run` checks; `--no-changes-expected` for reviews; an `escalate` after a verified review that leaves a decision open goes to the person.
+
 ## 0.22.1 (2026-10-02)
 
 Released by the daily Jev steward: 5 commit(s) on main since v0.22.0.

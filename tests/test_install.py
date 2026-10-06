@@ -203,6 +203,34 @@ class HermesInstallTests(unittest.TestCase):
             self.assertFalse((root / "profiles" / "alpha" / "plugins" / "hermes-jev").exists())
             self.assertEqual((root / "profiles" / "alpha" / "config.yaml").read_text(), CONFIG)
 
+    def test_agent_skill_folders_link_to_the_fleet_copy(self):
+        # Claude Code and Codex each got their own copy, so the same skill existed three
+        # times on one machine and an edit reached only one of them.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fleet(tmp)
+            install.install_hermes(root, "none", check=False)
+            shared = root / "skills" / "jev"
+            claude = Path(tmp) / "claude-skills"
+            (claude / "jev-setup").mkdir(parents=True)          # an older copy is replaced
+            (claude / "jev-setup" / "SKILL.md").write_text("stale")
+            report = install.install_skills(claude, check=False, shared=shared)
+            for name in install.SKILLS:
+                self.assertTrue((claude / name).is_symlink(), name)
+                self.assertEqual((claude / name).resolve(), (shared / name).resolve(), name)
+            self.assertEqual(report["linked_to"], str(shared))
+            self.assertFalse((claude / "jev-setup" / "SKILL.md").read_text() == "stale")
+            install.install_skills(claude, check=False, shared=shared)   # rerun keeps the links
+            self.assertTrue((claude / "jev-setup").is_symlink())
+
+    def test_agent_skill_folders_are_copies_without_hermes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "skills"
+            report = install.install_skills(folder, check=False)
+            self.assertNotIn("linked_to", report)
+            for name in install.SKILLS:
+                self.assertFalse((folder / name).is_symlink(), name)
+                self.assertTrue((folder / name / "SKILL.md").is_file(), name)
+
     def test_every_shipped_plugin_is_installed_and_enabled(self):
         # The installer named one plugin, so hermes-handoff was unreachable however
         # faithfully you followed the docs.
