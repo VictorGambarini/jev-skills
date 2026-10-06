@@ -170,3 +170,20 @@ class TextHelperConfigTests(unittest.TestCase):
         got = runner.resolve_credentials({"JEV_BROWSER_CONFIG": "/nonexistent/browser.json"}, lookup=lambda *a: None)
         self.assertEqual(got["TEXT_MODEL"], runner.DEFAULT_TEXT_MODEL)
         self.assertNotIn("TEXT_MODEL_RESPONSE_FORMAT", got)
+
+
+class ClaudeCliTextHelperTests(unittest.TestCase):
+    def test_claude_cli_needs_no_key_and_never_reads_the_keychain(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "browser.json"
+            cfg.write_text(json.dumps({"TEXT_MODEL_PROVIDER": "claude-cli", "TEXT_MODEL": "claude-haiku-4-5"}))
+            calls = []
+            got = runner.resolve_credentials({"JEV_BROWSER_CONFIG": str(cfg), "TYPESAFE_API_KEY": "t",
+                                              "CLAUDE_CLI": "/x/claude"},
+                                             lookup=lambda *a: calls.append(a))
+            self.assertEqual(got["TEXT_MODEL_PROVIDER"], "claude-cli")
+            self.assertEqual(got["TEXT_MODEL"], "claude-haiku-4-5")
+            self.assertEqual(got["CLAUDE_CLI"], "/x/claude")
+            self.assertNotIn("TEXT_MODEL_API_KEY", got)
+            self.assertEqual(calls, [])
