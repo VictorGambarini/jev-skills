@@ -750,6 +750,80 @@ def uninstall_claude(claude: Path) -> Dict[str, object]:
     return out
 
 
+# Claude Code hooks: `jev hook <event>` at the two seams the Hermes plugin uses. Each switch
+# (hook_skills, hook_screen) is off until a person turns it on, so registering them changes
+# nothing a session does until then.
+CLAUDE_HOOKS = (("UserPromptSubmit", None, "user-prompt", 15), ("PostToolUse", "WebFetch|WebSearch", "post-tool", 20))
+
+
+def _is_our_hook(entry: object) -> bool:
+    """An entry whose every command is `<jev> hook user-prompt|post-tool`: ours to replace or remove."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list) or not entry["hooks"]:
+        return False
+    return all(isinstance(h, dict) and str(h.get("command", "")).rstrip().endswith(
+        tuple(f" hook {name}" for *_, name, _ in CLAUDE_HOOKS)) for h in entry["hooks"])
+
+
+def _without_ours(hooks: Dict[str, object]) -> Dict[str, object]:
+    out: Dict[str, object] = {}
+    for event, entries in hooks.items():
+        kept = [e for e in entries if not _is_our_hook(e)] if isinstance(entries, list) else entries
+        if kept != []:
+            out[event] = kept
+    return out
+
+
+def install_claude_hooks(claude: Path, command: str, check: bool) -> Dict[str, object]:
+    """Register the two hooks in <claude>/settings.json, backed up first, ours only."""
+    path = claude / "settings.json"
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        return {"settings": str(path), "change": "skipped", "reason": "settings.json is not valid JSON; left alone"}
+    if not isinstance(settings, dict) or not isinstance(settings.get("hooks", {}), dict):
+        return {"settings": str(path), "change": "skipped", "reason": "unexpected settings.json shape; left alone"}
+    hooks = _without_ours(dict(settings.get("hooks") or {}))
+    for event, matcher, name, timeout in CLAUDE_HOOKS:
+        entry: Dict[str, object] = {"hooks": [{"type": "command", "command": f"{shlex.quote(command)} hook {name}",
+                                               "timeout": timeout}]}
+        if matcher:
+            entry = {"matcher": matcher, **entry}
+        hooks.setdefault(event, [])
+        hooks[event].append(entry)  # type: ignore[union-attr]
+    after = {**settings, "hooks": hooks}
+    out: Dict[str, object] = {"settings": str(path), "events": [e for e, *_ in CLAUDE_HOOKS],
+                              "switches": "off until `jev switches hook_skills shadow` / `jev switches hook_screen shadow`"}
+    if after == settings:
+        out["change"] = "unchanged"
+        return out
+    out["change"] = "updated" if path.is_file() else "added"
+    if not check:
+        if path.is_file():
+            out["backup"] = _backup(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(after, indent=2) + "\n", encoding="utf-8")
+    return out
+
+
+def uninstall_claude_hooks(claude: Path) -> Optional[Dict[str, object]]:
+    path = claude / "settings.json"
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(settings, dict) or not isinstance(settings.get("hooks"), dict):
+        return None
+    hooks = _without_ours(settings["hooks"])
+    if hooks == settings["hooks"]:
+        return None
+    backup = _backup(path)
+    after = {**settings, "hooks": hooks}
+    if not hooks:
+        after.pop("hooks")
+    path.write_text(json.dumps(after, indent=2) + "\n", encoding="utf-8")
+    return {"settings": str(path), "backup": backup, "change": "hooks removed"}
+
+
 def install_cli(check: bool, hermes_home: "Path | None" = None) -> Dict[str, object]:
     target = Path.home() / ".local" / "bin" / "jev"
     not_linked: Dict[str, str] = {}
@@ -896,6 +970,9 @@ def main() -> int:
     parser.add_argument("--no-claude-md", action="store_true",
                         help="install the lane subagents but leave every instructions file alone "
                              "(CLAUDE.md, GEMINI.md, AGENTS.md)")
+    parser.add_argument("--claude-hooks", action="store_true",
+                        help="Claude Code: register `jev hook` for skill suggestions and web screening in "
+                             "~/.claude/settings.json (each stays off until `jev switches hook_skills|hook_screen ...`)")
     parser.add_argument("--hermes-root-only", action="store_true",
                         help="Refresh only the selected Hermes home; no profile links, other agents or config edits")
     parser.add_argument("--search-browser-only", action="store_true",
@@ -951,6 +1028,9 @@ def main() -> int:
         report["skills_removed"] = [str(f / n) for f in unique for n in SKILLS if _remove(f / n)]
         if (home / ".claude").is_dir():
             report["claude_code"] = uninstall_claude(home / ".claude")
+            undone_hooks = uninstall_claude_hooks(home / ".claude")
+            if undone_hooks:
+                report["claude_code"]["hooks"] = undone_hooks  # type: ignore[index]
         for harness in harnesses(home):
             if harness.name != "claude-code" and harness.home.is_dir():
                 undone = uninstall_lanes_for(harness)
@@ -976,6 +1056,8 @@ def main() -> int:
             entry: Dict[str, object] = {"skills_via": reached[harness.name]}
             if harness.name == "claude-code":
                 entry.update(install_claude(harness.home, args.check, not args.no_claude_md))
+                if args.claude_hooks:
+                    entry["hooks"] = install_claude_hooks(harness.home, str(cli["command"]), args.check)
             elif harness.name in tables:
                 entry.update(install_lanes_for(harness, tables[harness.name], home, args.check,
                                                not args.no_claude_md))

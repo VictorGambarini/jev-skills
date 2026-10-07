@@ -30,6 +30,9 @@ MODES: Dict[str, Tuple[str, ...]] = {
     # Jev-Omni answers vision_analyze questions locally and logs; it never changes a result.
     "vision": ("off", "shadow"),
     "lanes": ("off", "shadow", "on"),
+    # Claude Code hooks (jev hook ...): the plugin's skill suggestion and web screening.
+    "hook_skills": ("off", "shadow", "on"),
+    "hook_screen": ("off", "shadow", "on"),
 }
 # Block is the one mode that can stop an agent. It needs a second key that only a person makes.
 BLOCK_MARKER = "GATE_BLOCK_ALLOWED"

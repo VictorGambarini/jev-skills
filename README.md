@@ -48,6 +48,8 @@ Python 3.9 or newer, no dependencies. Got it as a zip? Unzip it anywhere and run
 
 The installer finds Hermes, Claude Code, Codex, Gemini CLI and OpenCode on the machine (by config folder or command on PATH) and installs for each one it finds. Skills go to the fewest folders that reach every harness found: `~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex and Gemini CLI, and OpenCode reads either. Gemini CLI and OpenCode also get lane subagents and a lanes block in `GEMINI.md` / `AGENTS.md` once `lanes.json` names models for them (see [lanes.md](docs/lanes.md)); Codex has no subagents, so it gets skills only. `python3 install.py --check` shows exactly what it would do without changing anything. `--uninstall` reverses it. For Claude Code it also adds four lane subagents (`jev-lane-small` … `jev-lane-escalate`, each with its own model and effort) and a short, delimited lanes block in `~/.claude/CLAUDE.md`, backed up first (`--no-claude-md` leaves that file alone). See [lanes.md](docs/lanes.md).
 
+**Claude Code hooks** (`python3 install.py --claude-hooks`): skill suggestions on each prompt and screening of `WebFetch`/`WebSearch` results, each off until `jev switches hook_skills|hook_screen shadow`. On Claude Code the screen warns rather than withholds, because a hook cannot change a built-in tool's output. See [claude-code-hooks.md](docs/claude-code-hooks.md).
+
 **Not sure yet?** Run `jev models suggest --write` to draft routing pools from price bands, then `/jev routing shadow` for a day. Shadow mode decides and logs without switching anything, so a day of decisions costs almost nothing and risks nothing. Turn it on when the log looks right.
 
 ## On Hermes

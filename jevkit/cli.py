@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__, backends, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, paths, plan, policy as policy_mod, rerank, replay, route, search, skillpick, spend, supervise, triage, tuning
+from . import __version__, backends, catalog, choose, cli_decide, cli_lane, client, compact, hooks, key_setup, keystore, ladder, mailbox, memo, paths, plan, policy as policy_mod, rerank, replay, route, search, skillpick, spend, supervise, triage, tuning
 
 
 def _stdin_json() -> Any:
@@ -850,6 +850,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key-env", default="", help="add: the variable that holds its key (default JEV_BACKEND_<NAME>_API_KEY)")
     p.add_argument("--no-default", action="store_true", help="add: do not make it the default")
     p.set_defaults(func=cmd_backend)
+
+    p = sub.add_parser("hook", help="Claude Code hooks: read the hook event on stdin, answer on stdout, never block")
+    p.add_argument("event", choices=sorted(hooks.HANDLERS))
+    p.set_defaults(func=lambda args: hooks.run(args.event))
 
     p = sub.add_parser("doctor", help="is the key present, does Jev answer, and do the routing pools waste money")
     p.add_argument("--offline", action="store_true")
