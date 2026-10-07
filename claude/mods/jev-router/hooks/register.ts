@@ -1,4 +1,5 @@
 import type { Register } from 'claude-code'
+import { chooseModel, FOLLOW_UP_MS, sessionLane, type LaneName, type Previous } from './policy'
 
 // jev-router: a cheap decision model (the `jev` command: Jev, or your own backend) makes
 // three decisions inside Claude Code, where settings hooks cannot reach.
@@ -13,9 +14,9 @@ import type { Register } from 'claude-code'
 // Claude Code would have sent it. After a failure the mod stops asking for COOL_OFF_MS, so a
 // backend that is down costs one timeout, not one per prompt.
 
-// Switch the model only while the conversation is this small. The prompt cache is per
-// model, so a switch on a large context re-reads all of it uncached, which can cost more
-// than the bigger model reading it from cache. Effort still follows the lane above this.
+// Below this much context the model follows the lane freely; above it the model only moves
+// up (policy.chooseModel): the prompt cache is per model, so a switch on a large context
+// re-reads all of it uncached. Effort follows the lane at any size.
 const MODEL_SWITCH_MAX_TOKENS = 40_000
 const CLASSIFY_TIMEOUT_MS = 6_000
 const COOL_OFF_MS = 5 * 60_000
@@ -29,10 +30,54 @@ const MODEL_IDS: Record<string, string> = {
 const NO_EFFORT = /haiku/
 
 type Lane = { lane: string; model?: string; effort?: string }
+type Table = Record<string, { model?: string; effort?: string }>
 
 const prompts = new Map<string, string>()        // turnId -> the person's text
 const decisions = new Map<string, Lane | null>()  // turnId -> the lane (null: run as is)
 let quietUntil = 0                                // no jev calls before this time (ms)
+let previous: Previous | null = null              // the last routed turn of the main thread
+let lastModel: string | undefined                 // the model the main thread last ran on
+let table: Table | null = null                    // `jev lane targets`, read once
+let loadedFor: string | null = null               // the session `previous` / `lastModel` belong to
+
+// `previous` and `lastModel` outlive the process: `claude -p --continue`, `--resume` and a
+// restart each start a fresh copy of this module, which would otherwise forget the session.
+type Memory = Record<string, { previous: Previous | null; lastModel?: string; at: number }>
+const MEMORY_KEY = 'sessions'
+const MEMORY_SESSIONS = 50
+
+async function sessionId($: any): Promise<string | null> {
+  try { return await $.session.id() } catch { return null }
+}
+
+async function load($: any): Promise<void> {
+  const id = await sessionId($)
+  if (id === null || id === loadedFor) return
+  loadedFor = id
+  // This mod screens WebFetch / WebSearch here; the settings hook (`jev hook post-tool`) stands
+  // down for the session instead of warning about text the mod withholds.
+  await jev($, ['hook', 'mod-session'], JSON.stringify({ session_id: id }), CLASSIFY_TIMEOUT_MS)
+  try {
+    const kept = ((await $.store.get(MEMORY_KEY)) as Memory | undefined)?.[id]
+    previous = kept?.previous ?? null
+    lastModel = kept?.lastModel
+  } catch {
+    previous = null
+    lastModel = undefined
+  }
+}
+
+async function save($: any): Promise<void> {
+  if (loadedFor === null) return
+  try {
+    const memory = ((await $.store.get(MEMORY_KEY)) as Memory | undefined) ?? {}
+    memory[loadedFor] = { previous, lastModel, at: Date.now() }
+    const newest = Object.entries(memory).sort(([, a], [, b]) => b.at - a.at).slice(0, MEMORY_SESSIONS)
+    await $.store.set(MEMORY_KEY, Object.fromEntries(newest))
+  } catch {
+    // the in-process copy still holds for the rest of this process
+  }
+}
 
 function remember<V>(map: Map<string, V>, key: string, value: V): void {
   map.set(key, value)
@@ -62,11 +107,31 @@ async function jev($: any, args: string[], stdin: string, timeoutMs: number): Pr
   return null
 }
 
-async function classify($: any, text: string): Promise<Lane | null> {
+async function classify($: any, text: string): Promise<LaneName | null> {
   if (!text.trim() || text.trimStart().startsWith('/')) return null
   const out = await jev($, ['lane', 'classify', '--task', '-', '--host', 'claude-code'], text, CLASSIFY_TIMEOUT_MS)
   if (!out || !out.target || out.lane === 'keep_current') return null
-  return { lane: out.lane, model: out.target.model, effort: out.target.effort }
+  return out.lane as LaneName
+}
+
+// Every lane's model and effort, so a lane the session rules raise has its target too.
+async function lanes($: any): Promise<Table> {
+  if (table === null) {
+    const out = await jev($, ['lane', 'targets', '--host', 'claude-code'], '', CLASSIFY_TIMEOUT_MS)
+    if (out?.lanes) table = out.lanes
+  }
+  return table ?? {}
+}
+
+// The lane for a turn: Jev's reading, then the session rules (policy.sessionLane).
+async function decide($: any, text: string): Promise<Lane | null> {
+  const now = Date.now()
+  const recent = previous !== null && now - previous.at <= FOLLOW_UP_MS
+  if (!text.trim()) return recent && previous ? { lane: previous.lane, ...(await lanes($))[previous.lane] } : null
+  const ruled = sessionLane(await classify($, text), previous, text, now)
+  if (ruled.lane === null) return null
+  previous = { lane: ruled.lane, at: now, corrections: ruled.corrections }
+  return { lane: ruled.lane, ...(await lanes($))[ruled.lane] }
 }
 
 async function screen($: any, tool: string, text: string): Promise<{ text: string; flagged: number } | null> {
@@ -99,18 +164,22 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     // A subagent's steps keep the model its definition names (the lane agents included).
     if (e.agentId) return yield* next(e)
-    if (!decisions.has(e.turnId)) {
-      const lane = await classify($, prompts.get(e.turnId) ?? '')
-      remember(decisions, e.turnId, lane)
+    const first = !decisions.has(e.turnId)
+    if (first) {
+      await load($)
+      remember(decisions, e.turnId, await decide($, prompts.get(e.turnId) ?? ''))
     }
     const lane = decisions.get(e.turnId)
     if (!lane) {
       $.ui.status('jev: as is')
+      lastModel = e.model
+      if (first) await save($)
       return yield* next(e)
     }
-    let model = e.model
     const wanted = lane.model ? (MODEL_IDS[lane.model] ?? lane.model) : undefined
-    if (wanted && wanted !== e.model && (await contextTokens($)) < MODEL_SWITCH_MAX_TOKENS) model = wanted
+    const model = chooseModel(wanted, lastModel ?? e.model, await contextTokens($), MODEL_SWITCH_MAX_TOKENS)
+    lastModel = model
+    if (first) await save($)
     const effort = NO_EFFORT.test(model) ? undefined : ((lane.effort as typeof e.effort) ?? e.effort)
     $.ui.status(`jev: ${lane.lane} · ${model.replace('claude-', '')}${effort ? ' · ' + effort : ''}`)
     return yield* next({ ...e, model, effort })
