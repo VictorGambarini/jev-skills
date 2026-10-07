@@ -46,8 +46,7 @@ async function jev($: any, args: string[], stdin: string, timeoutMs: number): Pr
   try {
     // A login shell, so ~/.local/bin (where install.py links `jev`) is on PATH however
     // Claude Code was started. The arguments go through "$@", never through the shell text.
-    const ran = await $.process.run({ argv: ['/bin/sh', '-lc', 'exec jev "$@"', 'jev', ...args],
-                                      init: { stdin, timeoutMs } })
+    const ran = await $.process.run(['/bin/sh', '-lc', 'exec jev "$@"', 'jev', ...args], { stdin, timeoutMs })
     if (ran.exitCode === 0 && ran.stdout.trim()) {
       const out = JSON.parse(ran.stdout)
       // A fail-open answer from jev (the backend did not answer) also starts the cool-off.
@@ -55,8 +54,9 @@ async function jev($: any, args: string[], stdin: string, timeoutMs: number): Pr
       return out
     }
     if (ran.exitCode === 0) return null   // nothing to say (a hook with no output) is not a failure
-  } catch {
+  } catch (error) {
     // did not answer in time, or could not be started
+    $.ui.status(`jev: unavailable (${String((error as any)?.message ?? error).slice(0, 80)})`)
   }
   quietUntil = now + COOL_OFF_MS
   return null
