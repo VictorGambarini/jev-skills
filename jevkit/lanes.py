@@ -35,7 +35,9 @@ from . import decide as engine, paths
 
 LANES = ("small", "medium", "high", "escalate")
 STEP_ACTIONS = ("continue", "retry", "verify", "escalate", "complete")
-HOSTS = ("claude-code", "hermes")
+HOSTS = ("claude-code", "hermes")  # built in; lanes.json may define any other harness
+HOST_ENV = "JEV_LANE_HOST"
+_HOST_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 
 # The Claude Code subagents the installer writes (claude/agents/jev-lane-*.md) carry the same
 # model and effort in their frontmatter, so `Agent(subagent_type="jev-lane-small")` is the lane.
@@ -82,21 +84,63 @@ def _config_files() -> List[Path]:
     return files + ([shared] if shared not in files else [])
 
 
-def targets(host: str = "claude-code") -> Dict[str, Dict[str, str]]:
-    """The lane -> model/effort map for a host, with any local ``lanes.json`` laid on top.
-
-    ``lanes.json`` is ``{"hermes": {"small": {"model": "...", "effort": "low"}}}``; a lane or
-    field it does not name keeps the default. An unreadable file is ignored, never fatal.
-    """
-    if host not in TARGETS:
-        raise ValueError(f"host must be one of {', '.join(HOSTS)}")
-    out = {lane: dict(spec) for lane, spec in TARGETS[host].items()}
+def _local_tables() -> List[Dict[str, Any]]:
+    """Each readable lanes.json, least specific first. An unreadable file is ignored, never fatal."""
+    out = []
     for path in _config_files():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for lane, spec in ((data or {}).get(host) or {}).items() if isinstance(data, dict) else ():
+        if isinstance(data, dict):
+            out.append(data)
+    return out
+
+
+def hosts() -> List[str]:
+    """The built-in harnesses, then every other one a lanes.json defines completely.
+
+    A harness lanes.json adds (Codex, OpenCode, Gemini CLI, a home-grown loop) must name a
+    model for all four lanes: a lane with no model would be an instruction nobody can follow.
+    """
+    found = list(HOSTS)
+    merged: Dict[str, Dict[str, Any]] = {}
+    for data in _local_tables():
+        for host, table in data.items():
+            if host in HOSTS or not isinstance(host, str) or not _HOST_NAME.fullmatch(host) \
+                    or not isinstance(table, dict):
+                continue
+            for lane, spec in table.items():
+                if lane in LANES and isinstance(spec, dict):
+                    merged.setdefault(host, {}).setdefault(lane, {}).update(spec)
+    for host, table in sorted(merged.items()):
+        if all(isinstance((table.get(lane) or {}).get("model"), str) and table[lane]["model"].strip()
+               for lane in LANES):
+            found.append(host)
+    return found
+
+
+def default_host() -> str:
+    """``JEV_LANE_HOST`` when it names a known harness, else Claude Code (the historical default)."""
+    pinned = (os.environ.get(HOST_ENV) or "").strip()
+    return pinned if pinned and pinned in hosts() else "claude-code"
+
+
+def targets(host: Optional[str] = None) -> Dict[str, Dict[str, str]]:
+    """The lane -> model/effort map for a host, with any local ``lanes.json`` laid on top.
+
+    ``lanes.json`` is ``{"hermes": {"small": {"model": "...", "effort": "low"}}}``; a lane or
+    field it does not name keeps the default. A host that is not built in exists only through
+    lanes.json, and only once all four of its lanes name a model (see ``hosts``).
+    """
+    host = host or default_host()
+    if host not in hosts():
+        raise ValueError(f"host must be one of {', '.join(hosts())}")
+    out = {lane: dict(spec) for lane, spec in TARGETS.get(host, {}).items()}
+    for lane in LANES:
+        out.setdefault(lane, {})
+    for data in _local_tables():
+        for lane, spec in (data.get(host) or {}).items() if isinstance(data.get(host), dict) else ():
             if lane in out and isinstance(spec, dict):
                 out[lane].update({str(k): str(v) for k, v in spec.items() if isinstance(v, (str, int, float))})
     return out
@@ -188,9 +232,10 @@ def evidence(repo: Any = ".", runs: Sequence[str] = (), scope: Sequence[str] = (
 # ── the two decisions ────────────────────────────────────────────────────────
 
 def classify(task: str, *, context: str = "", facts: Optional[Mapping[str, Any]] = None,
-             host: str = "claude-code", mode: str = "live", timeout: float = 4.0,
+             host: Optional[str] = None, mode: str = "live", timeout: float = 4.0,
              transport: Any = None, record: bool = True) -> Dict[str, Any]:
     """The first lane for a piece of work: one Jev request, three questions, code applies the rules."""
+    host = host or default_host()
     state = {"task": task, **({"context": context} if context else {})}
     decision = engine.decide(state, "lane", mode=mode, facts=dict(facts or {}), timeout=timeout,
                              transport=transport, record=record)
@@ -218,7 +263,7 @@ def _complete_supported(facts: Mapping[str, Any]) -> Optional[str]:
 
 
 def step(task: str, *, lane: str, attempts: int = 1, facts: Optional[Mapping[str, Any]] = None,
-         state: Optional[Mapping[str, Any]] = None, notes: str = "", host: str = "claude-code",
+         state: Optional[Mapping[str, Any]] = None, notes: str = "", host: Optional[str] = None,
          same_failure_repeated: bool = False, mode: str = "live", timeout: float = 4.0,
          transport: Any = None, record: bool = True) -> Dict[str, Any]:
     """After one implementation cycle: continue / retry / verify / escalate / complete.
@@ -226,6 +271,7 @@ def step(task: str, *, lane: str, attempts: int = 1, facts: Optional[Mapping[str
     ``facts`` and ``state`` normally come from ``evidence``. The answer names the lane to run
     next: the same lane, one lane up on escalate, or ``person`` when escalate is already the top.
     """
+    host = host or default_host()
     if lane not in LANES:
         raise ValueError(f"lane must be one of {', '.join(LANES)}")
     known = {**dict(facts or {}), "lane": lane, "attempts": int(attempts),

@@ -444,6 +444,42 @@ def _backup(path: Path) -> str:
     return str(backup)
 
 
+def _claude_lanes() -> Dict[str, Dict[str, str]]:
+    """The claude-code lane table in force, lanes.json overrides included."""
+    sys.path.insert(0, str(REPO))
+    from jevkit import lanes  # noqa: PLC0415 - the installer stays importable without jevkit
+    return lanes.targets("claude-code")
+
+
+def render_agent(source: Path, table: Dict[str, Dict[str, str]]) -> str:
+    """A lane agent with the model and effort the lane table says, not the ones in the file.
+
+    The shipped files carry Claude Code's defaults; a lanes.json that moves a lane to another
+    model would otherwise leave `jev lane classify` naming one model and the agent running another.
+    """
+    text = source.read_text(encoding="utf-8")
+    spec = table.get(source.stem[len("jev-lane-"):]) if source.stem.startswith("jev-lane-") else None
+    if not spec:
+        return text
+    model, effort = spec.get("model", ""), spec.get("effort", "")
+    if model:
+        text = re.sub(r"(?m)^model: .*$", lambda _: f"model: {model}", text, count=1)
+        text = re.sub(r"\(([\w.-]+), (\w+) effort\)",
+                      lambda m: f"({model}, {effort or m.group(2)} effort)", text, count=1)
+    if effort:
+        text = re.sub(r"(?m)^effort: .*$", lambda _: f"effort: {effort}", text, count=1)
+    return text
+
+
+def render_block(text: str, table: Dict[str, Dict[str, str]]) -> str:
+    """The CLAUDE.md lanes block, naming each lane's model and effort from the table."""
+    for lane, spec in table.items():
+        if spec.get("model"):
+            label = f"{spec['model']}, {spec['effort']}" if spec.get("effort") else spec["model"]
+            text = re.sub(rf"`jev-lane-{lane}` \([^)]*\)", lambda _: f"`jev-lane-{lane}` ({label})", text)
+    return text
+
+
 def install_claude(claude: Path, check: bool, with_block: bool = True) -> Dict[str, object]:
     """Lane subagents into <claude>/agents and the lanes block into <claude>/CLAUDE.md.
 
@@ -454,20 +490,23 @@ def install_claude(claude: Path, check: bool, with_block: bool = True) -> Dict[s
     out: Dict[str, object] = {"folder": str(claude)}
     written: List[str] = []
     left: Dict[str, str] = {}
+    table = _claude_lanes()
     for source in CLAUDE_AGENTS:
         target = claude / "agents" / source.name
         if target.exists() and AGENT_MARKER not in target.read_text(encoding="utf-8", errors="replace"):
             left[str(target)] = "exists and was not written by this installer"
             continue
         if not check:
-            _copyfile(source, target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render_agent(source, table), encoding="utf-8")
         written.append(str(target))
+    out["lane_models"] = {lane: spec.get("model") for lane, spec in table.items()}
     out["agents"] = written
     if left:
         out["agents_left_alone"] = left
     if with_block:
         path = claude / "CLAUDE.md"
-        block = CLAUDE_BLOCK.read_text(encoding="utf-8").strip() + "\n"
+        block = render_block(CLAUDE_BLOCK.read_text(encoding="utf-8"), table).strip() + "\n"
         before = path.read_text(encoding="utf-8") if path.is_file() else ""
         kept = _strip_block(before)
         after = (kept.rstrip("\n") + "\n\n" if kept.strip() else "") + block

@@ -63,6 +63,9 @@ def _brief(decision: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def cmd_lane(args: Any) -> int:
+    args.host = args.host or lanes.default_host()
+    if args.host not in lanes.hosts():
+        return _bad(f"--host must be one of {', '.join(lanes.hosts())}")
     try:
         if args.action == "targets":
             return _out({"host": args.host, "lanes": lanes.targets(args.host)})
@@ -142,7 +145,9 @@ def add_parsers(sub: Any) -> None:
     p.add_argument("--task", help="the work, in the person's words (- reads stdin)")
     p.add_argument("--context", help="classify: a line of context (repo, files involved)")
     p.add_argument("--facts", help="JSON object or file of values your code computed; never sent")
-    p.add_argument("--host", choices=list(lanes.HOSTS), default="claude-code")
+    p.add_argument("--host", default=None,
+                   help="the harness whose lane table to use: claude-code, hermes, or one lanes.json defines "
+                        "(default: $JEV_LANE_HOST, else claude-code)")
     p.add_argument("--lane", choices=list(lanes.LANES), help="step/next: the lane this cycle ran in")
     p.add_argument("--attempt", type=int, default=1, help="step: attempts so far in this lane")
     p.add_argument("--same-failure", action="store_true", help="step: the same failure as the last attempt")
