@@ -133,6 +133,33 @@ class ScreenHook(Base):
         self.assertIn("jev-hooks", str(self.home / "jev" / "logs" / "jev-hooks.jsonl"))
 
 
+
+class ScreenText(Base):
+    """For a host that can replace a tool's output: only the flagged sentences are withheld."""
+
+    PAGE = ScreenHook.PAGE
+
+    def test_only_the_instruction_is_withheld_and_the_rest_kept(self):
+        switches.set_mode("hook_screen", "on")
+        units = webscreen.units("WebFetch", self.PAGE)[1]
+        bad = next(i for i, (_, text) in enumerate(units) if "ignore all previous" in text)
+        with mock.patch.object(webscreen, "screen", return_value={"status": "ok", "flagged": [bad], "units": len(units)}):
+            out = hooks.screen_text({"tool": "WebFetch", "text": self.PAGE})
+        self.assertEqual(out["flagged"], 1)
+        self.assertNotIn("ignore all previous", out["text"])
+        self.assertIn("tomatoes and watering", out["text"])
+        self.assertIn("withheld by Jev screening", out["text"])
+
+    def test_off_shadow_and_clean_return_nothing(self):
+        with mock.patch.object(webscreen, "screen", return_value={"status": "ok", "flagged": [0], "units": 1}) as screen:
+            self.assertIsNone(hooks.screen_text({"text": self.PAGE}))          # off by default
+            screen.assert_not_called()
+            switches.set_mode("hook_screen", "shadow")
+            self.assertIsNone(hooks.screen_text({"text": self.PAGE}))
+        switches.set_mode("hook_screen", "on")
+        with mock.patch.object(webscreen, "screen", return_value={"status": "ok", "flagged": [], "units": 1}):
+            self.assertIsNone(hooks.screen_text({"text": self.PAGE}))
+
 class Install(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

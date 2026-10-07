@@ -192,9 +192,47 @@ def screen_output(tool: str, text: str, verdict: Mapping[str, Any]) -> Dict[str,
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note}}
 
 
+def screen_text(event: Mapping[str, Any], *, transport: Any = None) -> Optional[Dict[str, Any]]:
+    """For a host that CAN replace a tool's output (a Claude Code mod's `tool.call`): the text
+    with every flagged part withheld, or nothing when the switch is off or nothing was flagged.
+
+    ``{"tool": "WebFetch", "text": "..."}`` in; ``{"text": withheld, "flagged": n}`` out.
+    """
+    mode = switches.mode("hook_screen")
+    tool, text = str(event.get("tool") or "WebFetch"), event.get("text")
+    if mode == "off" or not isinstance(text, str) or len(text) < SCREEN_MIN_CHARS:
+        return None
+    verdict = webscreen.screen(tool, text, send=not _private(), transport=transport)
+    flagged = sorted(verdict.get("flagged") or [])
+    _log({"kind": "screen", "mode": mode, "tool": tool, "via": "mod", "status": verdict.get("status"),
+          "screening": verdict.get("screening"), "units": verdict.get("units"), "flagged": len(flagged),
+          "latency_ms": verdict.get("latency_ms")})
+    if mode != "on" or not flagged:
+        return None
+    _, found = webscreen.units(tool, text)
+    pieces = []
+    for index, (_, chunk) in enumerate(found):
+        pieces.append(_withhold_sentences(chunk) if index in flagged else chunk)
+    return {"text": "".join(pieces), "flagged": len(flagged)}
+
+
+def _withhold_sentences(chunk: str) -> str:
+    """A flagged chunk with only the sentences the local screen recognises withheld.
+
+    A chunk is up to 900 characters, often a whole short page; withholding it whole lost the
+    ordinary text around one planted line. When no sentence is recognised (Jev flagged what
+    the patterns cannot see), the chunk goes whole, as webscreen.withhold does.
+    """
+    parts = re.split(r"((?<=[.!?])\s+|\n+)", chunk)
+    hits = [i for i, part in enumerate(parts) if part.strip() and rerank.local_screen(part)]
+    if not hits:
+        return webscreen.NOTICE.format(chars=len(chunk))
+    return "".join(webscreen.NOTICE.format(chars=len(part)) if i in hits else part for i, part in enumerate(parts))
+
+
 # ── entry point ──────────────────────────────────────────────────────────────
 
-HANDLERS = {"user-prompt": user_prompt, "post-tool": post_tool}
+HANDLERS = {"user-prompt": user_prompt, "post-tool": post_tool, "screen-text": screen_text}
 
 
 def run(event_name: str, stdin: Any = None, stdout: Any = None) -> int:
