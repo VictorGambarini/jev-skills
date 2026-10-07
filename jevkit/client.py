@@ -18,7 +18,7 @@ import time
 import urllib.parse
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
-from . import backends, keystore
+from . import __version__, backends, keystore
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_MODEL = "jev-latest"
@@ -38,7 +38,7 @@ ZEN_ENDPOINT = "https://opencode.ai/zen/v1/systemone"
 ZEN_MODEL = "jev-1.13-free"
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_STATE_CHARS = 60_000
-USER_AGENT = "hermes-jev-skills/0.1"
+USER_AGENT = f"jev-skills/{__version__}"
 
 State = Union[str, Mapping[str, Any], Sequence[Any]]
 Transport = Callable[[bytes, Dict[str, str], float], bytes]

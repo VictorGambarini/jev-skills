@@ -817,7 +817,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="jev", description="Hermes Jev Skills")
+    parser = argparse.ArgumentParser(prog="jev", description="Typed decisions for agents, answered by Jev or your own decision backend")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 

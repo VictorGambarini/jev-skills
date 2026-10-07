@@ -55,7 +55,7 @@ def _load_models_dev(refresh: bool) -> Dict[str, Any]:
                 return json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-    request = urllib.request.Request(MODELS_DEV_URL, headers={"User-Agent": "hermes-jev-skills"})
+    request = urllib.request.Request(MODELS_DEV_URL, headers={"User-Agent": "jev-skills"})
     with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 - fixed https URL
         raw = response.read(60_000_000)
     data = json.loads(raw)
@@ -129,7 +129,7 @@ def _fetch_nous() -> Optional[List[Dict[str, Any]]]:
         return None
     for token in tokens:
         request = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {token}", "User-Agent": "hermes-jev-skills"})
+            "Authorization": f"Bearer {token}", "User-Agent": "jev-skills"})
         try:
             with _open_nous(request) as response:
                 rows = json.loads(response.read(20_000_000)).get("data")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Hermes Jev Skills for whichever agents live on this machine.
+"""Install Jev Skills for whichever agent harnesses live on this machine.
 
     python3 install.py                 # detect Hermes / Claude Code / Codex / Gemini CLI / OpenCode
     python3 install.py --check         # show what would happen, change nothing
