@@ -48,7 +48,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from . import client
+from . import client, paths
 
 SHIPPED = Path(__file__).resolve().parent / "policies"
 NUMERIC_OPS = (">=", ">", "<=", "<")
@@ -74,13 +74,12 @@ class PolicyError(ValueError):
 # ── where policies live ──────────────────────────────────────────────────────
 
 def hermes_root() -> Path:
-    home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-    return home.parent.parent if home.parent.name == "profiles" else home
+    return paths.hermes_root()
 
 
 def override_dir() -> Path:
     """Local overrides, shared by every profile. An override is logged under its own sha."""
-    return hermes_root() / "jev" / "policies"
+    return paths.config_dir(shared=True) / "policies"
 
 
 def shipped_names() -> List[str]:

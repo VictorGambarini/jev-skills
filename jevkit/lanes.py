@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from . import decide as engine
+from . import decide as engine, paths
 
 LANES = ("small", "medium", "high", "escalate")
 STEP_ACTIONS = ("continue", "retry", "verify", "escalate", "complete")
@@ -76,10 +76,10 @@ CHECK_TIMEOUT = 900
 # ── lanes and targets ─────────────────────────────────────────────────────────
 
 def _config_files() -> List[Path]:
-    home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-    root = home.parent.parent if home.parent.name == "profiles" else home
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return [Path(base) / "jev" / "lanes.json", root / "jev" / "lanes.json"]
+    files = [Path(base) / "jev" / "lanes.json"]
+    shared = paths.config_dir(shared=True) / "lanes.json"
+    return files + ([shared] if shared not in files else [])
 
 
 def targets(host: str = "claude-code") -> Dict[str, Dict[str, str]]:

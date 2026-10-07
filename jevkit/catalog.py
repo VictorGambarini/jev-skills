@@ -16,6 +16,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
+from . import paths
+
 MODELS_DEV_URL = "https://models.dev/api.json"
 CACHE_TTL = 24 * 3600
 
@@ -27,13 +29,12 @@ HERMES_ALIASES = {
 
 
 def hermes_home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    return paths.hermes_home()
 
 
 def hermes_root() -> Path:
     """The shared Hermes folder. A profile's home is <root>/profiles/<name>."""
-    home = hermes_home()
-    return home.parent.parent if home.parent.name == "profiles" else home
+    return paths.hermes_root()
 
 
 def _cache_path() -> Path:

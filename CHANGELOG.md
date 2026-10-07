@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **One config home, Hermes or not** (`jevkit/paths.py`): ledger, switches, policy overrides, limits, lanes and the ladder resolved `~/.hermes` each on their own and created it on machines that never ran Hermes. Under Hermes the layout is unchanged; without it settings go to `$XDG_CONFIG_HOME/jev` and logs to `$XDG_STATE_HOME/jev/logs`; `JEV_HOME` overrides both. `jev doctor` reports the layout under `paths`.
 - **Named decision backends** (`jev backend add|use|list|remove|test`, `jev setup-key --backend`): any server that speaks the systemone protocol can replace Jev, selected by `JEV_BACKEND` or the default in `~/.config/jev/backends.json`. Each backend's key is stored under its own name and sent only to its own URL; no provider key is ever forwarded to one. A missing or broken selection fails open as `backend_misconfigured` rather than falling back to Jev. Backend calls bill $0 in the ledger, and `jev doctor` warns that policy thresholds are untuned on a non-Jev model. Tests pin the built-in providers so a machine's own backend config cannot leak into the suite.
 - Installer: preserve the canonical shared skill directory and aliases instead of replacing its source with self-referencing symlinks; regression tests cover both destructive edge cases.
 

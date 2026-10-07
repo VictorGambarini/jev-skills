@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__, backends, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, plan, rerank, replay, route, search, skillpick, spend, supervise, triage
+from . import __version__, backends, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, paths, plan, rerank, replay, route, search, skillpick, spend, supervise, triage
 
 
 def _stdin_json() -> Any:
@@ -250,6 +250,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             report["routing"]["warnings"] = [f"the routing checks could not run ({type(error).__name__}); "
                                              f"the pools were NOT checked. Look at {route.config_path()}."]
     report["hermes_home"] = str(catalog.hermes_home()) if catalog.hermes_home().is_dir() else None
+    report["paths"] = {"layout": "hermes" if paths.uses_hermes() else "jev", "config": str(paths.config_dir()),
+                       "logs": str(paths.logs_dir()), "profile": paths.profile()}
     _out(report)
     # Only a missing key fails doctor. The routing findings are warnings about cost: an
     # install script that gates on this exit code must not fail because a pool is pricey.

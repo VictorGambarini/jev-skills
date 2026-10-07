@@ -37,7 +37,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
-from . import ledger
+from . import ledger, paths
 
 try:  # POSIX only; without it the machine-wide lock is skipped, the memory guard still runs
     import fcntl
@@ -174,7 +174,7 @@ def omni_python() -> Path:
 
 
 def log_path() -> Path:
-    return ledger.hermes_home() / "logs" / "jev-vision.jsonl"
+    return paths.logs_dir() / "jev-vision.jsonl"
 
 
 def _digest(text: Any, n: int = 16) -> str:

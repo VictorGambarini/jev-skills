@@ -22,6 +22,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, Tuple
 
+from . import paths
+
 try:  # POSIX only; elsewhere the counter is best-effort within one process
     import fcntl  # type: ignore
 except ImportError:  # pragma: no cover - Windows
@@ -31,8 +33,7 @@ DEFAULTS: Dict[str, Any] = {"rpm": 1000, "daily_usd": 1.0, "shadow_share": 0.8}
 
 
 def root() -> Path:
-    home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-    return (home.parent.parent if home.parent.name == "profiles" else home) / "jev"
+    return paths.config_dir(shared=True)
 
 
 def config() -> Dict[str, Any]:

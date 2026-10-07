@@ -24,6 +24,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+from . import paths
+
 # TypeSafe list price (Models page, read 2026-09-26): $0.042 per million input tokens,
 # output free. The same figure mailbox.py and triage.py already use for their estimates.
 USD_PER_INPUT_TOKEN = 0.042 / 1_000_000
@@ -34,17 +36,16 @@ FIELDS = ("ts", "profile", "feature", "mode", "policy", "jev_model", "provider",
 
 
 def hermes_home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    return paths.hermes_home()
 
 
 def profile() -> str:
-    home = hermes_home()
-    return home.name if home.parent.name == "profiles" else "default"
+    return paths.profile()
 
 
 def path() -> Path:
     override = os.environ.get("JEV_LEDGER_PATH", "").strip()
-    return Path(override).expanduser() if override else hermes_home() / "logs" / "jev-ledger.jsonl"
+    return Path(override).expanduser() if override else paths.logs_dir() / "jev-ledger.jsonl"
 
 
 def enabled() -> bool:

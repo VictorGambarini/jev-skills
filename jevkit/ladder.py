@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from . import catalog as catalog_mod
+from . import catalog as catalog_mod, paths
 
 DEFAULT_COOLDOWN = 1800.0          # a full subscription seat is usually full for a while
 PROBE_CACHE_SECONDS = 900.0        # probing costs a request; 15 minutes is plenty
@@ -39,8 +39,9 @@ def state_path() -> Path:
     if override:
         return Path(override)
     root = catalog_mod.hermes_root()
-    base = root if root.is_dir() else Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
-    return base / "jev" / "ladder.json"
+    if paths.uses_hermes() and root.is_dir():
+        return root / "jev" / "ladder.json"
+    return paths.logs_dir(shared=True).parent / "ladder.json"
 
 
 def _read() -> Dict[str, Any]:

@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+from . import paths
+
 MODES: Dict[str, Tuple[str, ...]] = {
     "gate": ("off", "shadow", "tiebreak", "ask", "block"),
     "cron_wake": ("off", "shadow", "on"),
@@ -34,16 +36,15 @@ BLOCK_MARKER = "GATE_BLOCK_ALLOWED"
 
 
 def home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    return paths.hermes_home()
 
 
 def root() -> Path:
-    here = home()
-    return here.parent.parent if here.parent.name == "profiles" else here
+    return paths.hermes_root()
 
 
 def jev_dir(shared: bool = True) -> Path:
-    return (root() if shared else home()) / "jev"
+    return paths.config_dir(shared)
 
 
 def _read(path: Path) -> Dict[str, Any]:
