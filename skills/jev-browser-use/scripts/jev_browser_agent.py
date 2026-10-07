@@ -100,6 +100,44 @@ def _is_local(base: str) -> bool:
     return (urlparse(base).hostname or "") in ("127.0.0.1", "localhost", "::1")
 
 
+# The decision endpoint Ultrafast posts to when it reads this variable. A stock checkout posts
+# to api.typesafe.ai whatever is set, so a named backend's key is only ever handed to one
+# that is known to read it (see ultrafast_reads_endpoint).
+ENDPOINT_ENV = "JEV_SYSTEMONE_URL"
+
+
+def active_backend(env: dict) -> "tuple[str, str, str, str | None] | None":
+    """(name, url, model, key) of the named decision backend in force, or None for Jev.
+
+    Found through the `jev` command on PATH (a link into the checkout), so this script works
+    from an installed skill folder too. Any failure means "no named backend": the TypeSafe
+    path below is what ran before this existed.
+    """
+    try:
+        command = shutil.which("jev", path=env.get("PATH") or os.environ.get("PATH"))
+        if not command:
+            return None
+        root = Path(os.path.realpath(command)).parent.parent
+        if not (root / "jevkit" / "backends.py").is_file():
+            return None
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from jevkit import backends, keystore  # noqa: PLC0415
+        chosen = backends.active()
+        if chosen is None:
+            return None
+        return chosen.name, chosen.url, chosen.model, keystore.backend_key(chosen)
+    except Exception:  # noqa: BLE001 - a broken lookup must not crash the runner
+        return None
+
+
+def ultrafast_reads_endpoint(repo: Path = REPO) -> bool:
+    try:
+        return ENDPOINT_ENV in (repo / "jev_ultrafast" / "model.py").read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 def resolve_credentials(env: dict, lookup=None) -> dict:
     """Environment first, then the machine's browser config, then Keychain.
 
@@ -127,11 +165,21 @@ def resolve_credentials(env: dict, lookup=None) -> dict:
             (str(p) for p in (Path.home() / ".local/bin/claude", Path("/opt/homebrew/bin/claude")) if p.exists()), None)
         if found:
             resolved["CLAUDE_CLI"] = found
-    if typesafe:
+    backend = active_backend(env)
+    if backend is not None:
+        # Your own decision server: its URL, its model, its key. TYPESAFE_API_KEY is only the
+        # variable Ultrafast reads the bearer from; with ENDPOINT_ENV set it goes to that URL.
+        name, url, model, key = backend
+        resolved["JEV_BACKEND_NAME"] = name
+        resolved[ENDPOINT_ENV] = url
+        resolved["TYPESAFE_MODEL"] = model
+        if key:
+            resolved["TYPESAFE_API_KEY"] = key
+    elif typesafe:
         resolved["TYPESAFE_API_KEY"] = typesafe
     if text_key:
         resolved["TEXT_MODEL_API_KEY"] = text_key
-    resolved["TYPESAFE_MODEL"] = env.get("TYPESAFE_MODEL", "jev-latest")
+    resolved.setdefault("TYPESAFE_MODEL", env.get("TYPESAFE_MODEL", "jev-latest"))
     resolved["TEXT_MODEL"] = settings.get("TEXT_MODEL", DEFAULT_TEXT_MODEL)
     resolved["TEXT_MODEL_BASE_URL"] = base
     for k in ("TEXT_MODEL_PROVIDER", "TEXT_MODEL_RESPONSE_FORMAT", "TEXT_MODEL_REASONING"):
@@ -373,14 +421,24 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     creds = resolve_credentials(dict(os.environ))
-    print(f"typesafe: {redact(creds.get('TYPESAFE_API_KEY'))} model={creds['TYPESAFE_MODEL']}")
+    if creds.get(ENDPOINT_ENV):
+        if not ultrafast_reads_endpoint():
+            # A stock Ultrafast posts to api.typesafe.ai: it would send this backend's key there.
+            print(f"FAIL: decision backend {creds['JEV_BACKEND_NAME']!r} is selected, but {REPO} does not read "
+                  f"{ENDPOINT_ENV}, so it would send that backend's key to TypeSafe. Patch it, or run with "
+                  f"JEV_BACKEND=default to use Jev.")
+            return 2
+        print(f"decision backend: {creds['JEV_BACKEND_NAME']} {creds[ENDPOINT_ENV]} "
+              f"key={redact(creds.get('TYPESAFE_API_KEY'))} model={creds['TYPESAFE_MODEL']}")
+    else:
+        print(f"typesafe: {redact(creds.get('TYPESAFE_API_KEY'))} model={creds['TYPESAFE_MODEL']}")
     if creds.get("TEXT_MODEL_PROVIDER") == "claude-cli":
         print(f"text helper: claude-cli model={creds['TEXT_MODEL']} cli={creds.get('CLAUDE_CLI', '(not found)')}")
     else:
         print(f"text helper: {redact(creds.get('TEXT_MODEL_API_KEY'))} model={creds['TEXT_MODEL']} "
               f"base={creds['TEXT_MODEL_BASE_URL']}")
     if "TYPESAFE_API_KEY" not in creds:
-        print("FAIL: no TypeSafe credential. Run `jev setup-key`.")
+        print("FAIL: no decision backend credential. Run `jev setup-key` (or `jev setup-key --backend <name>`).")
         return 2
     for k, v in creds.items():
         os.environ[k] = v
