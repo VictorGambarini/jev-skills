@@ -38,9 +38,24 @@ The subagent's model and effort come from its definition's frontmatter (`model: 
 
 `jev lane classify` names the subagent. After it returns, `jev lane step --run "<tests>" --scope "<paths>"` decides the next move.
 
+To move a lane to another model, set it in `lanes.json` (`{"claude-code": {"small": {"model": "claude-haiku-4-5"}}}`) and rerun `install.py`: the installed agents and the CLAUDE.md block are written from the lane table in force, so the agent runs the model `jev lane classify` names.
+
 ## Hermes
 
 A Kanban card carries `model_override`, `provider_override` and `reasoning_effort`, and the dispatcher passes them to the worker. So a lane is two fields on the card, set before dispatch. The default map was calibrated on one fleet's history (below): `small` = `gpt-5.6-luna` at medium, `medium` and `high` = `gpt-6-sol` at medium (today's default), `escalate` = `gpt-6-astra` at high. Override any field in `<hermes root>/jev/lanes.json`.
+
+## Any other harness
+
+A harness that is not built in (Codex, OpenCode, Gemini CLI, your own loop) gets lanes from `lanes.json` alone. It counts once all four lanes name a model:
+
+```json
+{"codex": {"small":    {"model": "<small model id>",  "effort": "low"},
+           "medium":   {"model": "<medium model id>", "effort": "medium"},
+           "high":     {"model": "<large model id>",  "effort": "medium"},
+           "escalate": {"model": "<large model id>",  "effort": "high"}}}
+```
+
+Pick it per call with `--host codex`, or for a whole shell with `JEV_LANE_HOST=codex`. `jev lane targets` shows the table in force. `lanes.json` is read from `$XDG_CONFIG_HOME/jev/` and, under Hermes, `<hermes root>/jev/`.
 
 ```bash
 jev lane shadow                 # from cron every few minutes; does nothing until /jev lanes shadow

@@ -1,10 +1,12 @@
-# Hermes Jev Skills
+# Jev Skills
 
 **Give your agent a fast, cheap second brain for the small decisions.**
 
 Your agent burns frontier-model tokens on things that are not thinking: which model should answer this turn, which of 377 skills to load, which retrieved passages matter, which turns survive a summary, which button comes next. Those are decisions, not prose. Hand them to something that costs a fraction of a cent and answers in about 0.4 seconds, and let the expensive model do the writing.
 
-That is what [Jev](https://docs.typesafe.ai) is. It is TypeSafe's decision model. **It never writes text.** You give it a state and typed questions (pick one, score this, yes or no) and it answers with a calibrated confidence. This repo wires that into an agent's day.
+That is what a **decision backend** is: a model that **never writes text**. You give it a state and typed questions (pick one, score this, yes or no) and it answers with a calibrated confidence. [Jev](https://docs.typesafe.ai), TypeSafe's decision model, is the one every number below was measured on; any server that answers the same `/v1/systemone` request can take its place (see [Choosing a decision backend](#choosing-a-decision-backend)). This repo wires those decisions into an agent's day, on Hermes, Claude Code, Codex, Gemini CLI or OpenCode.
+
+In these docs, **Jev** is TypeSafe's model, a **decision backend** is whatever answers the questions (Jev or your own), and **`jev`** is the command.
 
 ![The model routing dashboard: the Jev on/shadow/off switch, the routing pools grid, and live decisions as they happen](docs/images/model-routing-dashboard.png)
 
@@ -44,9 +46,13 @@ git clone https://github.com/kerpopule/hermes-jev-skills ~/hermes-jev-skills && 
 jev setup-key   # paste your key into the one-time page it opens, then run: jev doctor
 ```
 
-Python 3.9 or newer, no dependencies. Got it as a zip? Unzip it anywhere and run `python3 install.py` from that folder. Or point your agent at this repo and say *"install Hermes Jev Skills"*: it will follow [AGENTS.md](AGENTS.md).
+Running your own decision server instead? `jev backend add <name> --url https://host/v1/systemone --model <id>`, then `jev setup-key --backend <name>`.
 
-The installer finds Hermes, Claude Code and Codex on the machine and installs for each one it finds. `python3 install.py --check` shows exactly what it would do without changing anything. `--uninstall` reverses it. For Claude Code it also adds four lane subagents (`jev-lane-small` … `jev-lane-escalate`, each with its own model and effort) and a short, delimited lanes block in `~/.claude/CLAUDE.md`, backed up first (`--no-claude-md` leaves that file alone). See [lanes.md](docs/lanes.md).
+Python 3.9 or newer, no dependencies. Got it as a zip? Unzip it anywhere and run `python3 install.py` from that folder. Or point your agent at this repo and say *"install Jev Skills"*: it will follow [AGENTS.md](AGENTS.md).
+
+The installer finds Hermes, Claude Code, Codex, Gemini CLI and OpenCode on the machine (by config folder or command on PATH) and installs for each one it finds. Skills go to the fewest folders that reach every harness found: `~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex and Gemini CLI, and OpenCode reads either. Gemini CLI and OpenCode also get lane subagents and a lanes block in `GEMINI.md` / `AGENTS.md` once `lanes.json` names models for them (see [lanes.md](docs/lanes.md)); Codex has no subagents, so it gets skills only. `python3 install.py --check` shows exactly what it would do without changing anything. `--uninstall` reverses it. For Claude Code it also adds four lane subagents (`jev-lane-small` … `jev-lane-escalate`, each with its own model and effort) and a short, delimited lanes block in `~/.claude/CLAUDE.md`, backed up first (`--no-claude-md` leaves that file alone). See [lanes.md](docs/lanes.md).
+
+**Claude Code hooks** (`python3 install.py --claude-hooks`): skill suggestions on each prompt and screening of `WebFetch`/`WebSearch` results, each off until `jev switches hook_skills|hook_screen shadow`. On Claude Code the screen warns rather than withholds, because a hook cannot change a built-in tool's output. See [claude-code-hooks.md](docs/claude-code-hooks.md).
 
 **Not sure yet?** Run `jev models suggest --write` to draft routing pools from price bands, then `/jev routing shadow` for a day. Shadow mode decides and logs without switching anything, so a day of decisions costs almost nothing and risks nothing. Turn it on when the log looks right.
 
@@ -83,9 +89,19 @@ jev models suggest --write   # first-draft pools from price bands; then edit to 
 
 The catalog is [models.dev](https://models.dev), filtered to providers whose API-key name is set in your environment or Hermes `.env`, or that Hermes holds a login for. Only key *names* are read. Pools live in `~/.hermes/jev/routing.json` (the default for every profile); `~/.hermes/profiles/<name>/jev/routing.json` overrides it for one profile. Details in [skills/jev-model-routing](skills/jev-model-routing/SKILL.md).
 
+## Choosing a decision backend
+
+| Backend | How | What it costs | What leaves your network |
+|---|---|---|---|
+| **Jev via TypeSafe** | `jev setup-key` | TypeSafe's per-token price | the redacted fields listed below |
+| **Jev via OpenRouter, Venice or OpenCode Zen** | `jev setup-key --provider openrouter\|venice\|zen` | that provider's price (Zen has a free tier) | the same, to that provider |
+| **Your own server** (any `/v1/systemone`) | `jev backend add …` then `jev setup-key --backend …` | your hardware; logged as $0 | nothing, if the server is yours |
+
+Every threshold this repo ships was measured on Jev. Another model's confidences are not the same numbers, so on your own backend `jev doctor` says so, each decision made with an untuned policy carries `untuned: true`, and the evals in `evals/` are how you find out where it differs. `jev backend tune` and `jev backend policy` then set that backend's own thresholds without touching Jev's. A worked example, Cloudflare's clef-flash on a self-hosted vLLM: [evals/backends/SCORECARD-2026-10-07-clef-flash.md](evals/backends/SCORECARD-2026-10-07-clef-flash.md) (same wire format, safe on the command gate, two behaviours that differ from Jev, one fixed in code for every backend).
+
 ## Your API key never touches the agent
 
-`jev setup-key` opens a one-time page served only by your own computer. You paste your [TypeSafe key](https://console.typesafe.ai/settings/keys) there. It goes straight into the OS secret store (macOS Keychain, or `secret-tool` on Linux, or a 0600 file as a last resort) and, on a Hermes machine, into each profile's `.env`. The agent that ran the command sees one line: stored, verified, yes or no. Never the key, not even a prefix.
+`jev setup-key` opens a one-time page served only by your own computer. You paste your [TypeSafe key](https://console.typesafe.ai/settings/keys) there (or your provider's, or with `--backend <name>` your own server's). It goes straight into the OS secret store (macOS Keychain, or `secret-tool` on Linux, or a 0600 file as a last resort) and, on a Hermes machine, into each profile's `.env`. The agent that ran the command sees one line: stored, verified, yes or no. Never the key, not even a prefix.
 
 The page lives on an unguessable one-time URL, refuses requests with a foreign `Host` header (DNS rebinding), sends no referrer, logs nothing, and shuts down after one use or ten minutes. On a headless box, run `jev setup-key --tty` yourself for a hidden prompt.
 
@@ -93,7 +109,7 @@ The page lives on an unguessable one-time URL, refuses requests with a foreign `
 
 ## What leaves your machine
 
-Jev is a cloud API, so this is spelled out rather than implied:
+Everything below goes to the decision backend in force (`jev doctor` names it under `key.provider`). With Jev that is a cloud API, so it is spelled out rather than implied. With your own server, the same fields go to that server and nowhere else: a backend's key and requests are never sent to any other host, and no provider key is ever sent to a backend.
 
 - **Routing**: the user's turn, redacted (emails, phones, tokens, long hex masked), capped at 2,500 characters (`ask_chars`), read as the opening and, mostly, the end. Never history, tool results, files or memory. Turns that look like they hold a secret, and any profile you list in `private_profiles`, send only coarse features: length, whether code is present, whether risk words appear.
 - **Memory**: the query and up to 900 characters per passage, redacted. Your store's ids, paths and sources are replaced with `P0`, `P1`… and never sent. A passage that looks like a credential is not sent at all.
@@ -112,14 +128,14 @@ One thing to be plain about: in the default `redacted-text` mode, routing sends 
 
 ## Everything fails open
 
-No key, timeout, rate limit, malformed reply, low confidence: routing keeps your current model, memory returns the original list, compaction drops nothing, skill selection suggests nothing, search returns the screened head of your list with the decision marked `unknown`, and computer use returns `reobserve`. A Jev outage costs you at most the time budget (2.5 s for routing) and never blocks a turn.
+No key, timeout, rate limit, malformed reply, low confidence: routing keeps your current model, memory returns the original list, compaction drops nothing, skill selection suggests nothing, search returns the screened head of your list with the decision marked `unknown`, and computer use returns `reobserve`. A backend outage, Jev's or your own, costs you at most the time budget (2.5 s for routing) and never blocks a turn.
 
-Safety rails that do not depend on Jev being right:
+Safety rails that do not depend on the decision backend being right:
 
 - Risk words (production, delete, migration, security, payment, legal…) never route to the cheapest tier.
 - A large context never switches to a cheaper model mid-session.
 - A transcript turn is only dropped on a confident answer.
-- Jev can only ever return an action id you put in the table.
+- The backend can only ever return an action id you put in the table, and an action already tried twice with no visible effect is not picked again.
 
 ## Layout
 

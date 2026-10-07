@@ -4,7 +4,7 @@ A person pointed you here to give their agent Jev. Follow these steps in order. 
 
 ## The one rule
 
-**You never see the person's TypeSafe API key.** Do not ask for it in chat. Do not read it from any file or secret store. Do not put it in a command, URL or config. If they paste it to you anyway: do not store or repeat it, tell them to replace that key at https://console.typesafe.ai/settings/keys, and continue with step 3, which is the only way a key gets in.
+**You never see the person's API key** (TypeSafe, a provider's, or their own decision server's). Do not ask for it in chat. Do not read it from any file or secret store. Do not put it in a command, URL or config. If they paste it to you anyway: do not store or repeat it, tell them to replace that key where it was issued (for TypeSafe, https://console.typesafe.ai/settings/keys), and continue with step 3, which is the only way a key gets in.
 
 ## Steps
 
@@ -14,7 +14,7 @@ A person pointed you here to give their agent Jev. Follow these steps in order. 
    git clone https://github.com/kerpopule/hermes-jev-skills ~/hermes-jev-skills
    ```
 
-2. **Preview, then install.** Show the person what `--check` reports before running the real thing. It detects Hermes, Claude Code and Codex and installs for each. On Hermes it installs every plugin this repo ships (`hermes-jev` for routing, `hermes-handoff` for end-of-session capsules) plus `scripts/nightly-handoff.py` under the Hermes home, and edits one list (`plugins.enabled`) in each `config.yaml`, with a timestamped backup beside it.
+2. **Preview, then install.** Show the person what `--check` reports before running the real thing. It detects Hermes, Claude Code, Codex, Gemini CLI and OpenCode and installs for each, writing the fewest skill folders that reach all of them. On Hermes it installs every plugin this repo ships (`hermes-jev` for routing, `hermes-handoff` for end-of-session capsules) plus `scripts/nightly-handoff.py` under the Hermes home, and edits one list (`plugins.enabled`) in each `config.yaml`, with a timestamped backup beside it.
 
    ```bash
    python3 ~/hermes-jev-skills/install.py --check
@@ -32,13 +32,17 @@ A person pointed you here to give their agent Jev. Follow these steps in order. 
    - **No agent was found.** Nothing was installed but the command itself. Ask where their agent reads skills from and rerun with `--skills-dir <path>`.
    - **`HERMES_HOME` is a single profile.** The install covered that one lane. Rerun with `--hermes-home ~/.hermes` for the whole fleet.
 
-3. **Connect the key, privately.** Run this and tell the person a page has opened on the computer you are running on, where they paste their key:
+3. **Pick the decision backend, then connect its key, privately.** Ask the person which one answers the decisions; do not guess:
 
-   ```bash
-   jev setup-key
-   ```
+   - **Jev through TypeSafe** (the default): `jev setup-key`. Through OpenRouter, Venice or OpenCode Zen instead: `jev setup-key --provider openrouter|venice|zen`.
+   - **Their own server** that answers `/v1/systemone`: they give you its URL and model id (never its key), then
 
-   It prints a JSON line with a `url` on stderr. That URL holds no secret, so if the browser did not open, or the person is on another device, send it to them and say it only works on the agent's computer. Wait for `{"status": "stored", "verified": true}`. If there is no browser at all, the person runs `jev setup-key --tty` themselves in their own terminal.
+     ```bash
+     jev backend add <name> --url https://<host>/v1/systemone --model <model id>
+     jev setup-key --backend <name>
+     ```
+
+   Tell the person a page has opened on the computer you are running on, where they paste their key. The command prints a JSON line with a `url` on stderr. That URL holds no secret, so if the browser did not open, or the person is on another device, send it to them and say it only works on the agent's computer. Wait for `{"status": "stored", "verified": true}`. For their own server, `"verified": false` with a `check_error` means the key was stored but the server refused the check request: run `jev backend test <name>` and show them `server_said` (a wrong model id reads `requested model is not loaded`). If there is no browser at all, the person runs `jev setup-key --tty` themselves in their own terminal.
 
 4. **Check:**
 
@@ -46,7 +50,7 @@ A person pointed you here to give their agent Jev. Follow these steps in order. 
    jev doctor
    ```
 
-   `key.present` and `jev.reachable` must both be true.
+   `key.present` and `jev.reachable` must both be true. On their own backend, also tell them the `warnings` line: the shipped thresholds were measured on Jev, not on their model, and the evals in `evals/` are how to check it.
 
 5. **Model pools** (only if `routing.tiers_configured` is empty):
 
@@ -60,7 +64,7 @@ A person pointed you here to give their agent Jev. Follow these steps in order. 
 
    `scripts/nightly-handoff.py` is copied into the Hermes home, but nothing schedules it and nothing runs it for them. Show them `python3 ~/.hermes/scripts/nightly-handoff.py --dry-run`, and add a cron or launchd entry only if they ask for one.
 
-7. **Report** in three or four sentences: what was installed where, any warning the installer printed, that the key is connected, what routing mode is set, and what needs a restart.
+7. **Report** in three or four sentences: what was installed where, any warning the installer printed, which decision backend is connected, what routing mode is set, and what needs a restart.
 
 ## Using it afterwards
 

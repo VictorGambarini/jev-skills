@@ -23,7 +23,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import client, privacy, rerank
+from . import client, privacy, rerank, tuning
 
 CHUNK_CHARS = rerank.PASSAGE_CHARS          # Jev reads a whole chunk; nothing is clipped
 MAX_CHUNKS = rerank.MAX_CANDIDATES          # 480: one extracted page of 15,000 chars is ~17
@@ -198,7 +198,7 @@ def screen(tool: str, result: str, *, send: bool = True, timeout: float = 4.0,
     for index, text in enumerate(texts):
         if index not in scores and index not in local and rerank.local_screen(text, unvetted=True):
             local.add(index)
-    flagged = sorted({index for index, score in scores.items() if score >= INJECTION_THRESHOLD}
+    flagged = sorted({index for index, score in scores.items() if score >= tuning.value("webscreen.injection_threshold", INJECTION_THRESHOLD)}
                      | {index for index in local if index not in scores})
     verdict.update({
         "status": "ok" if scores or not send or not eligible else "fail_open",

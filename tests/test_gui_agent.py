@@ -4,6 +4,7 @@ Every test here is a bug that was live in a released version, not a hypothetical
 """
 from __future__ import annotations
 
+import _isolate  # noqa: F401 - keep this machine's own decision backend out of the run
 import importlib.util
 import os
 import sys

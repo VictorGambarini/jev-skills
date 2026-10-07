@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+from . import paths
+
 MODES: Dict[str, Tuple[str, ...]] = {
     "gate": ("off", "shadow", "tiebreak", "ask", "block"),
     "cron_wake": ("off", "shadow", "on"),
@@ -28,22 +30,24 @@ MODES: Dict[str, Tuple[str, ...]] = {
     # Jev-Omni answers vision_analyze questions locally and logs; it never changes a result.
     "vision": ("off", "shadow"),
     "lanes": ("off", "shadow", "on"),
+    # Claude Code hooks (jev hook ...): the plugin's skill suggestion and web screening.
+    "hook_skills": ("off", "shadow", "on"),
+    "hook_screen": ("off", "shadow", "on"),
 }
 # Block is the one mode that can stop an agent. It needs a second key that only a person makes.
 BLOCK_MARKER = "GATE_BLOCK_ALLOWED"
 
 
 def home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    return paths.hermes_home()
 
 
 def root() -> Path:
-    here = home()
-    return here.parent.parent if here.parent.name == "profiles" else here
+    return paths.hermes_root()
 
 
 def jev_dir(shared: bool = True) -> Path:
-    return (root() if shared else home()) / "jev"
+    return paths.config_dir(shared)
 
 
 def _read(path: Path) -> Dict[str, Any]:

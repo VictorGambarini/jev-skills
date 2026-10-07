@@ -55,7 +55,7 @@ MAX_STEPS = 12
 MAX_COMMAND_CHARS = 2000
 MAX_RESPONSE_BYTES = 200_000
 MAX_RUNNING_APPS = 24
-USER_AGENT = "hermes-jev-skills/0.1"
+USER_AGENT = client.USER_AGENT
 
 # (url, body, headers, timeout) -> raw response bytes. Raises PlanError.
 Transport = Callable[[str, bytes, Dict[str, str], float], bytes]

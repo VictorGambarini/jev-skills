@@ -18,7 +18,7 @@ import time
 import urllib.parse
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
-from . import keystore
+from . import __version__, backends, keystore
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_MODEL = "jev-latest"
@@ -38,7 +38,7 @@ ZEN_ENDPOINT = "https://opencode.ai/zen/v1/systemone"
 ZEN_MODEL = "jev-1.13-free"
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_STATE_CHARS = 60_000
-USER_AGENT = "hermes-jev-skills/0.1"
+USER_AGENT = f"jev-skills/{__version__}"
 
 State = Union[str, Mapping[str, Any], Sequence[Any]]
 Transport = Callable[[bytes, Dict[str, str], float], bytes]
@@ -331,10 +331,23 @@ def _http_transport(body: bytes, headers: Dict[str, str], timeout: float, url: s
             code = {301: "http_301", 302: "http_302", 303: "http_303", 307: "http_307", 308: "http_308",
                     401: "auth_failed", 403: "auth_failed", 402: "credits_exhausted",
                     429: "rate_limited", 529: "overloaded"}.get(status, f"http_{status}")
-            raise JevError(code, retry_after=retry_after_seconds(response))
+            raise JevError(code, _error_excerpt(status, raw), retry_after=retry_after_seconds(response))
         _POOL.release(key, connection)
         return raw
     raise JevError("network")
+
+
+def _error_excerpt(status: int, raw: bytes) -> str:
+    """The start of the server's own explanation of a refused request, for a person to read.
+
+    A 422 that said only "http_422" left nobody able to tell which field the server objected
+    to. Auth failures and redirects keep no excerpt: their bodies are not about the request,
+    and a gateway's auth error is the one place a token could plausibly be echoed back.
+    """
+    if status in (301, 302, 303, 307, 308, 401, 403):
+        return ""
+    text = raw[:400].decode("utf-8", "replace")
+    return " ".join(text.split())[:300]
 
 
 MAX_RETRY_AFTER = 60.0
@@ -593,6 +606,7 @@ def ask(
     provider: Optional[str] = None,
     transport: Optional[Transport] = None,
     patient: bool = False,
+    backend: Optional["backends.Backend"] = None,
 ) -> Dict[str, Any]:
     """Ask Jev every question against one state, in a single request.
 
@@ -602,6 +616,10 @@ def ask(
     can move, and thresholds tuned on one version are only known to hold on that version.
     Raises ``JevError`` for anything the caller should not act on. ``timeout`` is a
     total wall-clock budget across retries, not a per-attempt one.
+
+    Where it goes, first match wins: an explicit ``backend``; an explicit ``provider`` or
+    ``api_key`` (the built-in Jev providers); ``TYPESAFE_BASE_URL``; the named backend that
+    ``JEV_BACKEND`` or ``backends.json`` selects; then the built-in provider order.
 
     ``patient=True`` is for batch jobs: a 429/529 that names a ``retry-after`` is waited out
     (within ``timeout``) instead of retried after a quarter second. A live caller never passes
@@ -615,22 +633,34 @@ def ask(
     base = os.environ.get("TYPESAFE_BASE_URL", "").strip()
     if base.rstrip("/") == "https://api.typesafe.ai":
         base = ""  # the official URL still uses the official credential flow
-    via = provider or ("typesafe" if api_key or base else keystore.provider())
-    if via not in keystore.PROVIDERS:
-        via = "typesafe"
-    endpoint = _custom_typesafe_endpoint(base) if base and via == "typesafe" else None
-    # A compatible endpoint may be a local mock or an explicit HTTPS proxy. Never forward
-    # either an explicit api_key or an automatically discovered provider key to it. The only
-    # bearer it can get is JEV_PROXY_API_KEY, which an operator sets for that gateway alone.
-    key = _proxy_key() if endpoint else api_key or keystore.resolve(via)
-    if not key and not endpoint:
-        raise JevError("no_key", "run `jev setup-key`")
+    if backend is None and not (provider or api_key or base):
+        try:
+            backend = backends.active()
+        except backends.BackendError as error:
+            raise JevError("backend_misconfigured", str(error)) from None
+    if backend is not None:
+        # A named backend gets its own key and nothing else: never a provider key, and
+        # never this backend's key at any other URL.
+        via, endpoint = backend.name, backend.url
+        key = api_key or keystore.backend_key(backend)
+        default_model = os.environ.get("JEV_MODEL") or backend.model
+    else:
+        via = provider or ("typesafe" if api_key or base else keystore.provider())
+        if via not in keystore.PROVIDERS:
+            via = "typesafe"
+        endpoint = _custom_typesafe_endpoint(base) if base and via == "typesafe" else None
+        # A compatible endpoint may be a local mock or an explicit HTTPS proxy. Never forward
+        # either an explicit api_key or an automatically discovered provider key to it. The only
+        # bearer it can get is JEV_PROXY_API_KEY, which an operator sets for that gateway alone.
+        key = _proxy_key() if endpoint else api_key or keystore.resolve(via)
+        if not key and not endpoint:
+            raise JevError("no_key", "run `jev setup-key`")
+        default_model = os.environ.get("TYPESAFE_MODEL") or _provider_model(via)
     encoded_state = state if isinstance(state, str) else json.dumps(state, separators=(",", ":"), default=str)
     if len(encoded_state) > MAX_STATE_CHARS:
         raise JevError("state_too_large")
-    default_model = _provider_model(via)
     body = json.dumps(
-        {"state": state, "model": model or os.environ.get("TYPESAFE_MODEL") or default_model,
+        {"state": state, "model": model or default_model,
          "questions": {name: dict(q) for name, q in questions.items()}},
         separators=(",", ":"), default=str,
     ).encode("utf-8")
@@ -681,11 +711,14 @@ def ask(
             "jev_model": model_seen if isinstance(model_seen, str) and model_seen else None,
             "input_tokens": int(tokens) if isinstance(tokens, (int, float)) and not isinstance(tokens, bool)
             and math.isfinite(float(tokens)) and tokens >= 0 else None,
-            "provider": "custom" if endpoint else via}
+            "provider": via if backend is not None else "custom" if endpoint else via}
 
 
-def verify_key(api_key: str, timeout: float = 10.0, provider: str = "typesafe") -> bool:
-    """One tiny synthetic call. True means the key is accepted by that provider."""
+def verify_key(api_key: str, timeout: float = 10.0, provider: str = "typesafe",
+               backend: Optional["backends.Backend"] = None) -> bool:
+    """One tiny synthetic call. True means the key is accepted by that provider or backend."""
+    if backend is not None:
+        return backend_key_error(api_key, backend, timeout) is None
     if provider == "typesafe" and os.environ.get("TYPESAFE_BASE_URL", "").strip().rstrip("/") not in ("", "https://api.typesafe.ai"):
         return False  # a compatible server cannot authenticate a TypeSafe credential
     try:
@@ -695,6 +728,21 @@ def verify_key(api_key: str, timeout: float = 10.0, provider: str = "typesafe") 
         return True
     except JevError:
         return False
+
+
+def backend_key_error(api_key: str, backend: "backends.Backend", timeout: float = 15.0) -> Optional[JevError]:
+    """None when the backend answers with this key, else the error code that says why not.
+
+    A bare True/False read every failure as "the key was refused": a slow first call, a 5xx
+    or a reply in an unexpected shape all told the person their key was wrong.
+    """
+    try:
+        ask("The build finished and all tests passed.",
+            {"ok": noul("The text reports a successful outcome")},
+            api_key=api_key, backend=backend, timeout=timeout)
+        return None
+    except JevError as error:
+        return error
 
 
 def batches(items: Sequence[Any], size: int) -> List[Sequence[Any]]:

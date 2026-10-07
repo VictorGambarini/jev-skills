@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Install Hermes Jev Skills for whichever agents live on this machine.
+"""Install Jev Skills for whichever agent harnesses live on this machine.
 
-    python3 install.py                 # detect Hermes / Claude Code / Codex and install for each
+    python3 install.py                 # detect Hermes / Claude Code / Codex / Gemini CLI / OpenCode
     python3 install.py --check         # show what would happen, change nothing
     python3 install.py --uninstall
 
@@ -28,7 +28,7 @@ import shlex
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 REPO = Path(__file__).resolve().parent
 JEV = REPO / "bin" / "jev"
@@ -425,6 +425,212 @@ def install_skills(folder: Path, check: bool, shared: "Path | None" = None) -> D
             **({"linked_to": str(shared)} if shared is not None else {})}
 
 
+# ── agent harnesses other than Hermes ────────────────────────────────────────
+#
+# What each harness reads, from its own docs (checked 2026-10-07): Claude Code reads
+# ~/.claude/skills; Codex reads ~/.agents/skills; Gemini CLI reads ~/.gemini/skills and its
+# ~/.agents/skills alias (the alias wins a name clash); OpenCode reads its own
+# ~/.config/opencode/skills and also ~/.claude/skills and ~/.agents/skills. Writing every one
+# of those folders would show OpenCode each skill three times, so the installer writes the
+# fewest folders that reach every harness on the machine.
+
+class Harness(NamedTuple):
+    name: str                      # also the `jev lane --host` name for its lane table
+    command: str                   # found on PATH counts as installed, even before first run
+    home: Path                     # its config folder
+    reads: Tuple[Path, ...]        # user-level skill folders it scans
+    own: Path                      # the folder to write when no shared one reaches it
+    instructions: Optional[Path]   # global instructions file that can carry the lanes block
+    agents: Optional[Path]         # folder for lane subagent files, if it has subagents
+
+
+def harnesses(home: Path) -> List[Harness]:
+    agents_skills = home / ".agents" / "skills"
+    codex = Path(os.environ.get("CODEX_HOME") or home / ".codex").expanduser()
+    opencode = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config").expanduser() / "opencode"
+    oc_reads = [opencode / "skills"]
+    if not os.environ.get("OPENCODE_DISABLE_EXTERNAL_SKILLS"):
+        if not os.environ.get("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"):
+            oc_reads.append(home / ".claude" / "skills")
+        oc_reads.append(agents_skills)
+    return [
+        Harness("claude-code", "claude", home / ".claude", (home / ".claude" / "skills",),
+                home / ".claude" / "skills", home / ".claude" / "CLAUDE.md", home / ".claude" / "agents"),
+        Harness("codex", "codex", codex, (agents_skills,), agents_skills, codex / "AGENTS.md", None),
+        Harness("gemini-cli", "gemini", home / ".gemini", (agents_skills, home / ".gemini" / "skills"),
+                agents_skills, home / ".gemini" / "GEMINI.md", home / ".gemini" / "agents"),
+        Harness("opencode", "opencode", opencode, tuple(oc_reads), opencode / "skills",
+                opencode / "AGENTS.md", opencode / "agents"),
+    ]
+
+
+def found_harnesses(home: Path) -> List[Harness]:
+    return [h for h in harnesses(home) if h.home.is_dir() or shutil.which(h.command)]
+
+
+# Folders an older installer wrote that today's harnesses no longer read. Refreshed only if
+# they already hold our skills, and always cleaned on --uninstall.
+def legacy_skill_folders(home: Path) -> List[Path]:
+    codex = Path(os.environ.get("CODEX_HOME") or home / ".codex").expanduser()
+    return [codex / "skills"]
+
+
+def plan_skill_folders(home: Path, found: Sequence[Harness], extra: Sequence[Path] = ()) -> Tuple[List[Path], Dict[str, str]]:
+    """The fewest skill folders that reach every harness found, and which one reaches which.
+
+    ``~/.agents/skills`` is also kept when ``~/.agents`` already exists, as before: other tools
+    read it too. A legacy folder is refreshed only when it already holds our skills.
+    """
+    chosen: List[Path] = list(extra)
+    if (home / ".agents").is_dir():
+        chosen.append(home / ".agents" / "skills")
+    reached: Dict[str, str] = {}
+    for harness in found:
+        hit = next((folder for folder in chosen if folder in harness.reads), None)
+        if hit is None:
+            chosen.append(harness.own)
+            hit = harness.own
+        reached[harness.name] = str(hit)
+    for folder in legacy_skill_folders(home):
+        if folder not in chosen and any((folder / name / "SKILL.md").is_file() for name in SKILLS):
+            chosen.append(folder)
+    unique: List[Path] = []
+    for folder in chosen:
+        if folder not in unique:
+            unique.append(folder)
+    return unique, reached
+
+
+def _lane_tables() -> Dict[str, Dict[str, Dict[str, str]]]:
+    sys.path.insert(0, str(REPO))
+    from jevkit import lanes  # noqa: PLC0415
+    return {host: lanes.targets(host) for host in lanes.hosts() if host != "hermes"}
+
+
+def _agent_body(lane: str) -> str:
+    """The shipped Claude Code lane agent's prompt, below its frontmatter."""
+    text = (REPO / "claude" / "agents" / f"jev-lane-{lane}.md").read_text(encoding="utf-8")
+    return text.split("---", 2)[2].lstrip("\n")
+
+
+def _agent_description(lane: str, spec: Dict[str, str]) -> str:
+    head = (REPO / "claude" / "agents" / f"jev-lane-{lane}.md").read_text(encoding="utf-8").split("---", 2)[1]
+    found = re.search(r'(?m)^description: "(.*)"$', head)
+    text = found.group(1) if found else f"Lane {lane}."
+    return re.sub(r"\(([\w.-]+), (\w+) effort\)",
+                  lambda m: f"({spec.get('model', m.group(1))}, {spec.get('effort') or m.group(2)} effort)", text, count=1)
+
+
+def render_foreign_agent(harness: str, lane: str, spec: Dict[str, str], instructions: str = "") -> str:
+    """A lane subagent in Gemini CLI's or OpenCode's own frontmatter, with the Claude prompt.
+
+    Gemini CLI: ``name``, ``description``, ``model``. OpenCode: ``description``,
+    ``mode: subagent``, ``model`` (``provider/model``) and an optional ``variant``. Neither has
+    an effort field; a lane's effort is kept in the description so it stays visible.
+    """
+    text = _agent_description(lane, spec)
+    text = text.replace("~/.claude/CLAUDE.md", instructions) if instructions else text
+    description = json.dumps(text)
+    lines = ["---"]
+    if harness == "gemini-cli":
+        lines += [f"name: jev-lane-{lane}", f"description: {description}", f"model: {spec['model']}"]
+    else:
+        lines += [f"description: {description}", "mode: subagent", f"model: {spec['model']}"]
+        if spec.get("variant"):
+            lines.append(f"variant: {spec['variant']}")
+    lines += [f"# {AGENT_MARKER}: install.py writes and removes this file", "---", ""]
+    return "\n".join(lines) + _agent_body(lane)
+
+
+def _write_block(path: Path, block: str, check: bool) -> Dict[str, object]:
+    before = path.read_text(encoding="utf-8") if path.is_file() else ""
+    kept = _strip_block(before)
+    after = (kept.rstrip("\n") + "\n\n" if kept.strip() else "") + block
+    out: Dict[str, object] = {"file": str(path)}
+    if after == before:
+        out["change"] = "unchanged"
+        return out
+    out["change"] = "updated" if BLOCK_BEGIN in before else "added"
+    if not check:
+        if before:
+            out["backup"] = _backup(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(after, encoding="utf-8")
+    return out
+
+
+def _remove_block(path: Path) -> Optional[Dict[str, object]]:
+    if not path.is_file():
+        return None
+    before = path.read_text(encoding="utf-8")
+    if BLOCK_BEGIN not in before:
+        return None
+    out: Dict[str, object] = {"file": str(path), "backup": _backup(path)}
+    after = _strip_block(before)
+    if after.strip():
+        path.write_text(after, encoding="utf-8")
+    else:
+        path.unlink()
+    out["change"] = "block removed"
+    return out
+
+
+def install_lanes_for(harness: Harness, table: Dict[str, Dict[str, str]], home: Path, check: bool,
+                      with_block: bool = True) -> Dict[str, object]:
+    """Lane subagents and the lanes block for Gemini CLI or OpenCode, from its lanes.json table.
+
+    Only once lanes.json defines that harness: its models are the person's provider choice and
+    there is no default to ship. Codex has no subagents to point a lane at, so it gets none.
+    """
+    out: Dict[str, object] = {}
+    if harness.agents is None:
+        return {"lanes": "not supported: no subagents to run a lane in"}
+    written, left = [], {}
+    for lane, spec in table.items():
+        target = harness.agents / f"jev-lane-{lane}.md"
+        if target.exists() and AGENT_MARKER not in target.read_text(encoding="utf-8", errors="replace"):
+            left[str(target)] = "exists and was not written by this installer"
+            continue
+        if not check:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shown = str(harness.instructions).replace(str(home), "~", 1) if harness.instructions else ""
+            target.write_text(render_foreign_agent(harness.name, lane, spec, shown), encoding="utf-8")
+        written.append(str(target))
+    out["agents"] = written
+    out["lane_models"] = {lane: spec.get("model") for lane, spec in table.items()}
+    if left:
+        out["agents_left_alone"] = left
+    if with_block and harness.instructions is not None:
+        claude_md = home / ".claude" / "CLAUDE.md"
+        if harness.name == "opencode" and not harness.instructions.exists() and claude_md.is_file() \
+                and not os.environ.get("OPENCODE_DISABLE_CLAUDE_CODE_PROMPT"):
+            # Creating OpenCode's AGENTS.md would stop it reading ~/.claude/CLAUDE.md, which is
+            # where this person's instructions reach it today. Not ours to switch off.
+            out["instructions"] = {"file": str(harness.instructions), "change": "skipped",
+                                   "reason": f"OpenCode reads {claude_md} while this file does not exist; "
+                                             f"creating it would stop that"}
+        else:
+            block = render_block(CLAUDE_BLOCK.read_text(encoding="utf-8"), table)
+            block = block.replace("`jev lane classify --task", f"`jev lane classify --host {harness.name} --task")
+            out["instructions"] = _write_block(harness.instructions, block.strip() + "\n", check)
+    return out
+
+
+def uninstall_lanes_for(harness: Harness) -> Dict[str, object]:
+    removed = []
+    if harness.agents is not None and harness.agents.is_dir():
+        for target in harness.agents.glob("jev-lane-*.md"):
+            if AGENT_MARKER in target.read_text(encoding="utf-8", errors="replace"):
+                target.unlink()
+                removed.append(str(target))
+    out: Dict[str, object] = {"agents_removed": removed}
+    if harness.instructions is not None:
+        block = _remove_block(harness.instructions)
+        if block:
+            out["instructions"] = block
+    return out
+
+
 # ── Claude Code: lane subagents and a delimited CLAUDE.md block ──────────────
 
 def _strip_block(text: str) -> str:
@@ -444,6 +650,42 @@ def _backup(path: Path) -> str:
     return str(backup)
 
 
+def _claude_lanes() -> Dict[str, Dict[str, str]]:
+    """The claude-code lane table in force, lanes.json overrides included."""
+    sys.path.insert(0, str(REPO))
+    from jevkit import lanes  # noqa: PLC0415 - the installer stays importable without jevkit
+    return lanes.targets("claude-code")
+
+
+def render_agent(source: Path, table: Dict[str, Dict[str, str]]) -> str:
+    """A lane agent with the model and effort the lane table says, not the ones in the file.
+
+    The shipped files carry Claude Code's defaults; a lanes.json that moves a lane to another
+    model would otherwise leave `jev lane classify` naming one model and the agent running another.
+    """
+    text = source.read_text(encoding="utf-8")
+    spec = table.get(source.stem[len("jev-lane-"):]) if source.stem.startswith("jev-lane-") else None
+    if not spec:
+        return text
+    model, effort = spec.get("model", ""), spec.get("effort", "")
+    if model:
+        text = re.sub(r"(?m)^model: .*$", lambda _: f"model: {model}", text, count=1)
+        text = re.sub(r"\(([\w.-]+), (\w+) effort\)",
+                      lambda m: f"({model}, {effort or m.group(2)} effort)", text, count=1)
+    if effort:
+        text = re.sub(r"(?m)^effort: .*$", lambda _: f"effort: {effort}", text, count=1)
+    return text
+
+
+def render_block(text: str, table: Dict[str, Dict[str, str]]) -> str:
+    """The CLAUDE.md lanes block, naming each lane's model and effort from the table."""
+    for lane, spec in table.items():
+        if spec.get("model"):
+            label = f"{spec['model']}, {spec['effort']}" if spec.get("effort") else spec["model"]
+            text = re.sub(rf"`jev-lane-{lane}` \([^)]*\)", lambda _: f"`jev-lane-{lane}` ({label})", text)
+    return text
+
+
 def install_claude(claude: Path, check: bool, with_block: bool = True) -> Dict[str, object]:
     """Lane subagents into <claude>/agents and the lanes block into <claude>/CLAUDE.md.
 
@@ -454,20 +696,23 @@ def install_claude(claude: Path, check: bool, with_block: bool = True) -> Dict[s
     out: Dict[str, object] = {"folder": str(claude)}
     written: List[str] = []
     left: Dict[str, str] = {}
+    table = _claude_lanes()
     for source in CLAUDE_AGENTS:
         target = claude / "agents" / source.name
         if target.exists() and AGENT_MARKER not in target.read_text(encoding="utf-8", errors="replace"):
             left[str(target)] = "exists and was not written by this installer"
             continue
         if not check:
-            _copyfile(source, target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render_agent(source, table), encoding="utf-8")
         written.append(str(target))
+    out["lane_models"] = {lane: spec.get("model") for lane, spec in table.items()}
     out["agents"] = written
     if left:
         out["agents_left_alone"] = left
     if with_block:
         path = claude / "CLAUDE.md"
-        block = CLAUDE_BLOCK.read_text(encoding="utf-8").strip() + "\n"
+        block = render_block(CLAUDE_BLOCK.read_text(encoding="utf-8"), table).strip() + "\n"
         before = path.read_text(encoding="utf-8") if path.is_file() else ""
         kept = _strip_block(before)
         after = (kept.rstrip("\n") + "\n\n" if kept.strip() else "") + block
@@ -503,6 +748,80 @@ def uninstall_claude(claude: Path) -> Dict[str, object]:
                 path.unlink()
             out["claude_md"] = "block removed"
     return out
+
+
+# Claude Code hooks: `jev hook <event>` at the two seams the Hermes plugin uses. Each switch
+# (hook_skills, hook_screen) is off until a person turns it on, so registering them changes
+# nothing a session does until then.
+CLAUDE_HOOKS = (("UserPromptSubmit", None, "user-prompt", 15), ("PostToolUse", "WebFetch|WebSearch", "post-tool", 20))
+
+
+def _is_our_hook(entry: object) -> bool:
+    """An entry whose every command is `<jev> hook user-prompt|post-tool`: ours to replace or remove."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list) or not entry["hooks"]:
+        return False
+    return all(isinstance(h, dict) and str(h.get("command", "")).rstrip().endswith(
+        tuple(f" hook {name}" for *_, name, _ in CLAUDE_HOOKS)) for h in entry["hooks"])
+
+
+def _without_ours(hooks: Dict[str, object]) -> Dict[str, object]:
+    out: Dict[str, object] = {}
+    for event, entries in hooks.items():
+        kept = [e for e in entries if not _is_our_hook(e)] if isinstance(entries, list) else entries
+        if kept != []:
+            out[event] = kept
+    return out
+
+
+def install_claude_hooks(claude: Path, command: str, check: bool) -> Dict[str, object]:
+    """Register the two hooks in <claude>/settings.json, backed up first, ours only."""
+    path = claude / "settings.json"
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        return {"settings": str(path), "change": "skipped", "reason": "settings.json is not valid JSON; left alone"}
+    if not isinstance(settings, dict) or not isinstance(settings.get("hooks", {}), dict):
+        return {"settings": str(path), "change": "skipped", "reason": "unexpected settings.json shape; left alone"}
+    hooks = _without_ours(dict(settings.get("hooks") or {}))
+    for event, matcher, name, timeout in CLAUDE_HOOKS:
+        entry: Dict[str, object] = {"hooks": [{"type": "command", "command": f"{shlex.quote(command)} hook {name}",
+                                               "timeout": timeout}]}
+        if matcher:
+            entry = {"matcher": matcher, **entry}
+        hooks.setdefault(event, [])
+        hooks[event].append(entry)  # type: ignore[union-attr]
+    after = {**settings, "hooks": hooks}
+    out: Dict[str, object] = {"settings": str(path), "events": [e for e, *_ in CLAUDE_HOOKS],
+                              "switches": "off until `jev switches hook_skills shadow` / `jev switches hook_screen shadow`"}
+    if after == settings:
+        out["change"] = "unchanged"
+        return out
+    out["change"] = "updated" if path.is_file() else "added"
+    if not check:
+        if path.is_file():
+            out["backup"] = _backup(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(after, indent=2) + "\n", encoding="utf-8")
+    return out
+
+
+def uninstall_claude_hooks(claude: Path) -> Optional[Dict[str, object]]:
+    path = claude / "settings.json"
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(settings, dict) or not isinstance(settings.get("hooks"), dict):
+        return None
+    hooks = _without_ours(settings["hooks"])
+    if hooks == settings["hooks"]:
+        return None
+    backup = _backup(path)
+    after = {**settings, "hooks": hooks}
+    if not hooks:
+        after.pop("hooks")
+    path.write_text(json.dumps(after, indent=2) + "\n", encoding="utf-8")
+    return {"settings": str(path), "backup": backup, "change": "hooks removed"}
 
 
 def install_cli(check: bool, hermes_home: "Path | None" = None) -> Dict[str, object]:
@@ -619,7 +938,7 @@ def nothing_installed_warning(hermes: Path, check: bool) -> str:
     """
     tense = "would be installed" if check else "was installed"
     return (f"No agent was found on this machine: no Hermes home at {hermes}, and no Claude "
-            f"Code, Codex or generic skills folder, so nothing {tense} except the `jev` command "
+            f"Code, Codex, Gemini CLI, OpenCode or ~/.agents folder, so nothing {tense} except the `jev` command "
             f"itself. If your agent reads skills from somewhere else, install them there with "
             f"--skills-dir <path>.")
 
@@ -649,7 +968,11 @@ def main() -> int:
     parser.add_argument("--enable", default="all", help="Hermes profiles to enable the plugins in: all, none, or a,b,c")
     parser.add_argument("--skills-dir", action="append", default=[], help="extra skill folder to install into")
     parser.add_argument("--no-claude-md", action="store_true",
-                        help="Claude Code: install the lane subagents but leave ~/.claude/CLAUDE.md alone")
+                        help="install the lane subagents but leave every instructions file alone "
+                             "(CLAUDE.md, GEMINI.md, AGENTS.md)")
+    parser.add_argument("--claude-hooks", action="store_true",
+                        help="Claude Code: register `jev hook` for skill suggestions and web screening in "
+                             "~/.claude/settings.json (each stays off until `jev switches hook_skills|hook_screen ...`)")
     parser.add_argument("--hermes-root-only", action="store_true",
                         help="Refresh only the selected Hermes home; no profile links, other agents or config edits")
     parser.add_argument("--search-browser-only", action="store_true",
@@ -686,8 +1009,9 @@ def main() -> int:
                           "cli": {"command": str(shim)}, "skill_folders": [],
                           **({"warning": "; ".join(warnings)} if warnings else {})}, indent=2))
         return 1 if warnings else 0
-    folders = [Path(p).expanduser() for p in args.skills_dir]
-    folders += [p for p in (home / ".claude" / "skills", home / ".codex" / "skills", home / ".agents" / "skills") if p.parent.is_dir()]
+    extra = [Path(p).expanduser() for p in args.skills_dir]
+    found = found_harnesses(home)
+    folders, reached = plan_skill_folders(home, found, extra)
 
     report: Dict[str, object] = {"repo": str(REPO), "mode": "uninstall" if args.uninstall else "check" if args.check else "install"}
     warnings: List[str] = [w for w in (home_warning(hermes),) if w]
@@ -695,9 +1019,23 @@ def main() -> int:
         if hermes.is_dir():
             report["hermes"] = uninstall_hermes(hermes)
             warnings += [w for w in (lane_warning(report["hermes"]),) if w]  # type: ignore[arg-type]
-        report["skills_removed"] = [str(f / n) for f in folders for n in SKILLS if _remove(f / n)]
+        # Every folder any harness reads, not only today's plan: an earlier install may have
+        # chosen differently, and a folder holding our skills is ours to clean.
+        everywhere = list(folders) + legacy_skill_folders(home) + [home / ".agents" / "skills"]
+        for harness in harnesses(home):
+            everywhere += list(harness.reads) + [harness.own]
+        unique = [f for i, f in enumerate(everywhere) if f not in everywhere[:i]]
+        report["skills_removed"] = [str(f / n) for f in unique for n in SKILLS if _remove(f / n)]
         if (home / ".claude").is_dir():
             report["claude_code"] = uninstall_claude(home / ".claude")
+            undone_hooks = uninstall_claude_hooks(home / ".claude")
+            if undone_hooks:
+                report["claude_code"]["hooks"] = undone_hooks  # type: ignore[index]
+        for harness in harnesses(home):
+            if harness.name != "claude-code" and harness.home.is_dir():
+                undone = uninstall_lanes_for(harness)
+                if undone.get("agents_removed") or undone.get("instructions"):
+                    report[harness.name] = undone
         # Not gated on hermes.is_dir(): a lane that was deleted is still a way of naming the
         # fleet root, and its install had linked every other lane.
         cli = uninstall_cli(hermes)
@@ -712,8 +1050,21 @@ def main() -> int:
             warnings += [w for w in (lane_warning(report["hermes"]),) if w]  # type: ignore[arg-type]
         shared = hermes / "skills" / "jev" if "hermes" in report else None
         report["skill_folders"] = [install_skills(f, args.check, shared) for f in folders]
-        if (home / ".claude").is_dir():
-            report["claude_code"] = install_claude(home / ".claude", args.check, not args.no_claude_md)
+        tables = _lane_tables()
+        report["harnesses"] = {}
+        for harness in found:
+            entry: Dict[str, object] = {"skills_via": reached[harness.name]}
+            if harness.name == "claude-code":
+                entry.update(install_claude(harness.home, args.check, not args.no_claude_md))
+                if args.claude_hooks:
+                    entry["hooks"] = install_claude_hooks(harness.home, str(cli["command"]), args.check)
+            elif harness.name in tables:
+                entry.update(install_lanes_for(harness, tables[harness.name], home, args.check,
+                                               not args.no_claude_md))
+            else:
+                entry["lanes"] = (f"none: define \"{harness.name}\" in lanes.json to add them"
+                                  if harness.agents is not None else "not supported: no subagents to run a lane in")
+            report["harnesses"][harness.name] = entry  # type: ignore[index]
         steps = ["jev doctor", "jev setup-key   (only if the key is missing; the person pastes it in a private page)",
                  "jev models suggest --write   (only if no routing pools exist yet)"]
         if "hermes" in report:

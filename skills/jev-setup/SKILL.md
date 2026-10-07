@@ -1,18 +1,18 @@
 ---
 name: jev-setup
-description: Use when Jev is not working yet, a Jev tool reports no_key or auth_failed, or the person asks to connect or fix Jev. Gets their TypeSafe or OpenRouter key into the secret store, unseen by you.
-version: 0.2.0
+description: Use when Jev or your own decision backend is not connected or fails (no_key, auth_failed, backend_misconfigured), or the person asks to set one up. Gets the key stored, unseen by you.
+version: 0.3.0
 license: MIT
 metadata:
   hermes:
     tags: [jev, typesafe, setup, credentials]
 ---
 
-# Connect Jev (the key never passes through you)
+# Connect a decision backend (the key never passes through you)
 
-Jev is TypeSafe's decision model. It needs one API key. **You must never see, ask for, or handle that key.**
+`jev` sends typed questions to a decision backend: **Jev**, TypeSafe's decision model, or the person's own server that answers the same `/v1/systemone` request. Either way it needs one API key. **You must never see, ask for, or handle that key.**
 
-The key can come from any of three places, and the same Jev answers either way:
+Ask which backend the person wants; do not assume Jev. For their own server, go to "Your own decision model" below. For Jev, the key can come from any of these, and the same Jev answers either way:
 
 - **TypeSafe** (`jev setup-key`, the default): a key from [console.typesafe.ai](https://console.typesafe.ai/settings/keys).
 - **OpenRouter** (`jev setup-key --provider openrouter`): reaches Jev through OpenRouter's Decisions API. Worth offering when the person already has an OpenRouter key, because it is then one key instead of two and one bill instead of two.
@@ -22,6 +22,18 @@ The key can come from any of three places, and the same Jev answers either way:
 `TYPESAFE_BASE_URL` is an explicit compatible-endpoint override for a local mock or HTTPS proxy (for example `http://127.0.0.1:8787`, or a gateway that mounts the API under a path such as `https://gw.example/jev`). It is not a built-in provider endpoint editor: the official URLs above stay fixed by default. The client never forwards a saved or supplied provider credential to an override endpoint — not the keychain entry, not the credentials file, and not `TYPESAFE_API_KEY` from the environment, because that variable is where most installs keep their real TypeSafe key. A gateway that requires a bearer gets `JEV_PROXY_API_KEY` instead: the operator sets it in the same environment as `TYPESAFE_BASE_URL`, for that gateway only, and it is sent to nothing else. The client permits plaintext only on numeric loopback and does not follow redirects. `jev doctor` names the override, says whether a bearer goes with it, and asks it: a gateway answering 401 shows up there as `auth_failed` instead of as silence. Do not send sensitive states to an untrusted proxy. Clear the variable to return to the official endpoint and normal key flow.
 
 If more than one key exists, TypeSafe is used: an existing install never starts routing its decisions somewhere else because an OpenRouter or Zen key happened to be in the environment for a text model. To pick a different one on purpose, set `JEV_PROVIDER=openrouter` or `JEV_PROVIDER=zen` in the environment the commands run in; it is honoured only when that provider actually has a key here, and an unset or unknown value changes nothing. `jev doctor` reports which one is in use under `key.provider`.
+
+## Your own decision model (a named backend)
+
+Any server that answers the same `POST /v1/systemone` request (state + typed questions in, validated `choice` / `score` / `noul` answers out) can take Jev's place. Name it once:
+
+```bash
+jev backend add mymodel --url https://host.example/v1/systemone --model org/model-id
+jev setup-key --backend mymodel     # private page, same rules as above; or export JEV_BACKEND_MYMODEL_API_KEY
+jev backend test mymodel            # one fixed question; shows the validated answers
+```
+
+The first backend added becomes the default (`~/.config/jev/backends.json`), so every `jev` command and the Hermes plugin send decisions there. `JEV_BACKEND=<name>` picks one for a single shell, `JEV_BACKEND=default` or `jev backend use default` returns to the built-in providers. A backend's key is read only from its own variable, secret-store entry or file and is sent only to its own URL; a provider key is never sent to a backend. Thresholds are Jev's until a backend's own eval says otherwise. `jev backend tune <name>` lists the knobs (`choose.min_confidence`, `skillpick.need_threshold`, `search.sufficiency_threshold`, …) and `jev backend tune <name> key=value` sets one for that backend only. `jev backend policy <name> <policy>` copies a decision policy into `~/.config/jev/backends/<name>/policies/`, where it wins while that backend is active; until then every decision it answers carries `untuned: true`. If the selected backend is missing or misconfigured, every feature fails open (`backend_misconfigured`) instead of quietly asking Jev. `jev doctor` names the backend and warns that the shipped thresholds were tuned on Jev, not on it.
 
 ## Rules
 
@@ -35,12 +47,13 @@ If more than one key exists, TypeSafe is used: an existing install never starts 
 2. Start the private key page:
 
    ```bash
-   jev setup-key
+   jev setup-key                      # Jev through TypeSafe; --provider openrouter|venice|zen for the others
+   jev setup-key --backend <name>     # the person's own server, after `jev backend add`
    ```
 
    It opens a page in the browser on the computer you are running on and prints one JSON line on stderr with a `url`. The URL holds no secret.
-3. Tell the person, in one sentence, to paste their TypeSafe key into the page that just opened. If `browser_opened` is false, or they are talking to you from another device (Telegram, phone), send them the `url` and tell them it only opens **on the computer the agent runs on**. If they have no key yet, they create one at https://console.typesafe.ai/settings/keys.
-4. Wait for the command to finish. It prints `{"status": "stored", "verified": true, ...}` when the key was saved and the provider accepted it. `rejected` means the key was wrong: run it again. `timed_out` means nobody used the page within ten minutes.
+3. Tell the person, in one sentence, to paste their key (TypeSafe's, the provider's, or their own server's) into the page that just opened. If `browser_opened` is false, or they are talking to you from another device (Telegram, phone), send them the `url` and tell them it only opens **on the computer the agent runs on**. If they have no TypeSafe key yet, they create one at https://console.typesafe.ai/settings/keys; a key for their own server comes from whoever runs it.
+4. Wait for the command to finish. It prints `{"status": "stored", "verified": true, ...}` when the key was saved and the provider accepted it. `rejected` means the key was refused (`auth_failed`): run it again. For a backend, `"verified": false` with `check_error` means the key was stored but the server refused the check request: `jev backend test <name>` shows `server_said`. `timed_out` means nobody used the page within ten minutes.
 5. Run `jev doctor` once more and report the result in a sentence.
 
 ## When there is no browser
@@ -51,4 +64,6 @@ Remote machine on a private network (Tailscale, VPN): `jev setup-key --host <pri
 
 ## Where the key goes
 
-The OS secret store (macOS Keychain service `Hermes TypeSafe API`, or `secret-tool` on Linux), falling back to `~/.config/jev/credentials` (mode 0600). On a Hermes machine it is also written as `TYPESAFE_API_KEY` into `~/.hermes/.env` and every `profiles/*/.env`, because each Hermes lane reads its own file. Running gateways pick it up on their next restart; do not restart one without being asked.
+A backend's key: the OS secret store under `Jev backend <name>`, else `~/.config/jev/credentials-backend-<name>` (0600); never a Hermes `.env`, and never sent to any other host.
+
+A Jev key: the OS secret store (macOS Keychain service `Hermes TypeSafe API`, or `secret-tool` on Linux), falling back to `~/.config/jev/credentials` (mode 0600). On a Hermes machine it is also written as `TYPESAFE_API_KEY` into `~/.hermes/.env` and every `profiles/*/.env`, because each Hermes lane reads its own file. Running gateways pick it up on their next restart; do not restart one without being asked.

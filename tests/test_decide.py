@@ -7,6 +7,7 @@ and ``fallback_used: true`` — and for a secret, nothing leaves the machine at 
 """
 from __future__ import annotations
 
+import _isolate  # noqa: F401 - keep this machine's own decision backend out of the run
 import json
 import sys
 import unittest

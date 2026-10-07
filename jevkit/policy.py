@@ -48,7 +48,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from . import client
+from . import backends, client, paths
 
 SHIPPED = Path(__file__).resolve().parent / "policies"
 NUMERIC_OPS = (">=", ">", "<=", "<")
@@ -74,13 +74,25 @@ class PolicyError(ValueError):
 # ── where policies live ──────────────────────────────────────────────────────
 
 def hermes_root() -> Path:
-    home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-    return home.parent.parent if home.parent.name == "profiles" else home
+    return paths.hermes_root()
 
 
 def override_dir() -> Path:
     """Local overrides, shared by every profile. An override is logged under its own sha."""
-    return hermes_root() / "jev" / "policies"
+    return paths.config_dir(shared=True) / "policies"
+
+
+def backend_dir() -> Optional[Path]:
+    """The active named backend's own policy folder, or None on a built-in Jev provider.
+
+    A policy there wins over the shared override and the shipped one while that backend is
+    active, so a model gets thresholds tuned on its own answers without moving Jev's.
+    """
+    try:
+        chosen = backends.active()
+    except backends.BackendError:
+        return None
+    return backends.policy_dir(chosen.name) if chosen is not None else None
 
 
 def shipped_names() -> List[str]:
@@ -97,7 +109,7 @@ def locate(name_or_path: str) -> Path:
         raise PolicyError(f"no policy file at {raw}")
     if not _NAME.match(raw):
         raise PolicyError(f"{raw!r} is not a policy name (lowercase letters, digits, - _ .)")
-    for folder in (override_dir(), SHIPPED):
+    for folder in tuple(f for f in (backend_dir(),) if f is not None) + (override_dir(), SHIPPED):
         path = folder / f"{raw}.json"
         if path.is_file():
             return path
@@ -118,7 +130,8 @@ def load(name_or_path: Any, *, choices: Optional[Mapping[str, Mapping[str, Any]]
         if not isinstance(raw, dict):
             raise PolicyError(f"{path.name} must hold one JSON object")
         raw.setdefault("name", path.stem)
-        origin = "override" if path.parent == override_dir() else "shipped" if path.parent == SHIPPED else "file"
+        origin = ("override" if path.parent == override_dir() else "shipped" if path.parent == SHIPPED
+                  else "backend" if path.parent == backend_dir() else "file")
     if choices:
         raw = bind(raw, choices)
     problems = lint(raw)
@@ -527,8 +540,12 @@ def lint(policy: Mapping[str, Any]) -> List[str]:
     if fields is not None and (not isinstance(fields, list) or not all(isinstance(f, str) for f in fields)):
         problems.append("state_fields must be a list of field names")
     tuned = policy.get("tuned_on")
-    if tuned is not None and (not isinstance(tuned, str) or not version_of(tuned)):
-        problems.append("tuned_on must name a Jev version, like jev-1.13.0")
+    # A Jev policy names the Jev version it was measured on; a backend's own copy names that
+    # backend's model id, which need not carry a version (Cloudflare/clef-flash).
+    # An alias that moves (`latest`, `jev-latest`) names nothing that was measured.
+    if tuned is not None and (not isinstance(tuned, str) or not tuned.strip() or "latest" in tuned.lower()
+                              or (tuned.startswith("jev") and not version_of(tuned))):
+        problems.append("tuned_on must name the model it was measured on, like jev-1.13.0")
     return problems
 
 
@@ -537,6 +554,17 @@ def lint(policy: Mapping[str, Any]) -> List[str]:
 def version_of(model: Optional[str]) -> Tuple[int, ...]:
     found = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", model or "")
     return tuple(int(part) for part in found.groups() if part is not None) if found else ()
+
+
+def untuned(rules: Mapping[str, Any], provider: Optional[str]) -> bool:
+    """True when a named backend answered a policy that was not tuned for it.
+
+    Recorded on every decision rather than acted on: the shipped thresholds still apply, and
+    the flag is what says they were never measured on this model. `jev backend policy`
+    copies a policy into the backend's own folder once its eval says the copy is right.
+    """
+    return bool(provider) and provider not in ("typesafe", "openrouter", "venice", "zen", "custom") \
+        and rules.get("_origin") != "backend"
 
 
 def drifted(tuned_on: Optional[str], jev_model: Optional[str]) -> Optional[bool]:

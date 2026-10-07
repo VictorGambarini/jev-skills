@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set
 
-from . import client, privacy
+from . import client, privacy, tuning
 
 logger = logging.getLogger(__name__)
 
@@ -370,8 +370,8 @@ def looks_trivial(turn: str) -> bool:
 # ── ranking ──────────────────────────────────────────────────────────────────
 
 def pick(
-    turn: str, skills: List[Dict[str, str]], *, top_k: int = 3, need_threshold: float = 0.5,
-    match_threshold: float = 0.5, timeout: float = 5.0, transport: Optional[client.Transport] = None,
+    turn: str, skills: List[Dict[str, str]], *, top_k: int = 3, need_threshold: Optional[float] = None,
+    match_threshold: Optional[float] = None, timeout: float = 5.0, transport: Optional[client.Transport] = None,
     stage_one: Optional[Mapping[int, Mapping[str, float]]] = None, stage_one_latency: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Which skill, if any, this turn needs.
@@ -381,6 +381,9 @@ def pick(
     stage 1, including the stage-2 verification and its thresholds, is unchanged.
     """
     skills = [skill for skill in skills if skill.get("name") not in META_SKILLS]
+    # Unset means the decision model's own value: Jev's measured default, or the active backend's.
+    need_threshold = tuning.value("skillpick.need_threshold") if need_threshold is None else need_threshold
+    match_threshold = tuning.value("skillpick.match_threshold") if match_threshold is None else match_threshold
     if looks_trivial(turn):
         return {"status": "ok", "needs_skill": 0.0, "skills": [], "latency_ms": 0, "skipped": "trivial"}
     if not skills or privacy.is_sensitive(turn):
@@ -474,7 +477,7 @@ def _rank(
             if option != "none":
                 ranked.append((probability, int(option[1:])))
     ranked.sort(reverse=True)
-    finalists = [index for probability, index in ranked[:FINALISTS] if probability >= SHORTLIST_FLOOR]
+    finalists = [index for probability, index in ranked[:FINALISTS] if probability >= tuning.value("skillpick.shortlist_floor", SHORTLIST_FLOOR)]
     if not finalists:
         return {"status": "ok", "needs_skill": 0.0, "skills": [], "latency_ms": latency}
 

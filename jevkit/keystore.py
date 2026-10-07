@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from . import backends
+
 ENV_VAR = "TYPESAFE_API_KEY"
 KEYCHAIN_SERVICE = "Hermes TypeSafe API"
 KEYCHAIN_ACCOUNT = ENV_VAR
@@ -69,11 +71,11 @@ def looks_like_key(value: str) -> bool:
 
 # ── read ─────────────────────────────────────────────────────────────────────
 
-def _from_keychain(provider: str = "typesafe") -> Optional[str]:
+def _keychain_lookup(service: str, account: str) -> Optional[str]:
     if sys.platform == "darwin" and os.path.exists(_SECURITY):
-        cmd = [_SECURITY, "find-generic-password", "-w", "-s", _SERVICE[provider], "-a", _ENV[provider]]
+        cmd = [_SECURITY, "find-generic-password", "-w", "-s", service, "-a", account]
     elif shutil.which("secret-tool"):
-        cmd = ["secret-tool", "lookup", "service", _SERVICE[provider], "account", _ENV[provider]]
+        cmd = ["secret-tool", "lookup", "service", service, "account", account]
     else:
         return None
     try:
@@ -84,9 +86,7 @@ def _from_keychain(provider: str = "typesafe") -> Optional[str]:
     return value if proc.returncode == 0 and value else None
 
 
-def _from_file(provider: str = "typesafe") -> Optional[str]:
-    path = credentials_file_for(provider)
-    variable = _ENV.get(provider, ENV_VAR)
+def _file_lookup(path: Path, variable: str) -> Optional[str]:
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.startswith(variable + "="):
@@ -94,6 +94,14 @@ def _from_file(provider: str = "typesafe") -> Optional[str]:
     except OSError:
         return None
     return None
+
+
+def _from_keychain(provider: str = "typesafe") -> Optional[str]:
+    return _keychain_lookup(_SERVICE[provider], _ENV[provider])
+
+
+def _from_file(provider: str = "typesafe") -> Optional[str]:
+    return _file_lookup(credentials_file_for(provider), _ENV.get(provider, ENV_VAR))
 
 
 def _for(provider: str) -> Optional[str]:
@@ -147,10 +155,63 @@ def source(for_provider: Optional[str] = None) -> str:
 
 
 def describe() -> Dict[str, object]:
+    try:
+        chosen = backends.active()
+    except backends.BackendError as error:
+        return {"present": False, "provider": "absent", "source": "absent", "length": 0,
+                "backend_error": str(error)}
+    if chosen is not None:
+        key = backend_key(chosen)
+        return {"present": bool(key), "provider": chosen.name, "backend": chosen.public(),
+                "source": backend_source(chosen), "length": len(key) if key else 0}
     name = provider()
     key = resolve()
     return {"present": bool(key), "provider": name, "source": source(),
             "length": len(key) if key else 0}
+
+
+# ── named backends (see backends.py) ─────────────────────────────────────────
+#
+# A backend's key lives under its own name in every store, so it can never be mistaken for a
+# provider key, and a provider key can never be read as a backend's. Same order as above:
+# its environment variable, the OS secret store, then a 0600 file.
+
+def _backend_service(backend: "backends.Backend") -> str:
+    return f"Jev backend {backend.name}"
+
+
+def backend_credentials_file(backend: "backends.Backend") -> Path:
+    return credentials_file().with_name(f"credentials-backend-{backend.name}")
+
+
+def backend_key(backend: "backends.Backend") -> Optional[str]:
+    return ((os.environ.get(backend.key_variable) or "").strip()
+            or _keychain_lookup(_backend_service(backend), backend.key_variable)
+            or _file_lookup(backend_credentials_file(backend), backend.key_variable))
+
+
+def backend_source(backend: "backends.Backend") -> str:
+    if (os.environ.get(backend.key_variable) or "").strip():
+        return "environment"
+    if _keychain_lookup(_backend_service(backend), backend.key_variable):
+        return "os-secret-store"
+    if _file_lookup(backend_credentials_file(backend), backend.key_variable):
+        return "credentials-file"
+    return "absent"
+
+
+def store_backend(value: str, backend: "backends.Backend") -> Dict[str, object]:
+    """Persist a backend's key under its own name. Returns where it went, never the key."""
+    value = value.strip()
+    if not looks_like_key(value):
+        raise ValueError("that does not look like an API key")
+    if _keychain_store(value, _backend_service(backend), backend.key_variable):
+        written = ["os-secret-store"]
+    else:
+        path = backend_credentials_file(backend)
+        upsert_env_file(path, value, backend.key_variable)
+        written = [str(path)]
+    return {"stored_in": written, "backend": backend.name, "length": len(value)}
 
 
 # ── write ────────────────────────────────────────────────────────────────────
@@ -183,15 +244,14 @@ def upsert_env_file(path: Path, value: str, variable: str = ENV_VAR) -> None:
     _write_private(path, "\n".join(lines) + "\n")
 
 
-def _store_keychain(value: str, provider: str = "typesafe") -> bool:
+def _keychain_store(value: str, service: str, account: str) -> bool:
     if sys.platform == "darwin" and os.path.exists(_SECURITY):
         # `security` has no stdin mode for the secret, so it is briefly an argv entry
         # of a child we own. The alternative (no secret store at all) is worse.
-        cmd = [_SECURITY, "add-generic-password", "-U", "-s", _SERVICE[provider], "-a", _ENV[provider], "-w", value]
+        cmd = [_SECURITY, "add-generic-password", "-U", "-s", service, "-a", account, "-w", value]
         stdin = None
     elif shutil.which("secret-tool"):
-        cmd = ["secret-tool", "store", "--label", _SERVICE[provider], "service", _SERVICE[provider],
-               "account", _ENV[provider]]
+        cmd = ["secret-tool", "store", "--label", service, "service", service, "account", account]
         stdin = value
     else:
         return False
@@ -200,6 +260,10 @@ def _store_keychain(value: str, provider: str = "typesafe") -> bool:
     except Exception:  # noqa: BLE001
         return False
     return proc.returncode == 0
+
+
+def _store_keychain(value: str, provider: str = "typesafe") -> bool:
+    return _keychain_store(value, _SERVICE[provider], _ENV[provider])
 
 
 def hermes_env_files(hermes_home: Optional[Path] = None) -> List[Path]:

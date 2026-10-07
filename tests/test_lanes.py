@@ -199,6 +199,58 @@ class ClaudeAgents(unittest.TestCase):
             self.assertLessEqual(len(loaded["questions"]), 8)
 
 
+class AnyHarness(TempHome):
+    """A harness that is not built in gets lanes from lanes.json, and only a complete table counts."""
+
+    CODEX = {lane: {"model": f"gpt-{lane}", "effort": "medium"} for lane in lanes.LANES}
+
+    def write(self, data):
+        (self.home / "jev").mkdir(exist_ok=True)
+        (self.home / "jev" / "lanes.json").write_text(json.dumps(data))
+
+    def test_a_complete_table_adds_a_harness(self):
+        self.write({"codex": self.CODEX})
+        self.assertIn("codex", lanes.hosts())
+        self.assertEqual(lanes.targets("codex")["escalate"],
+                         {"model": "gpt-escalate", "effort": "medium", "agent": "jev-lane-escalate"})
+
+    def test_an_incomplete_table_is_not_a_harness(self):
+        self.write({"codex": {"small": {"model": "gpt-small"}}, "Bad Name": self.CODEX})
+        self.assertEqual(lanes.hosts(), list(lanes.HOSTS))
+        with self.assertRaises(ValueError):
+            lanes.targets("codex")
+
+    def test_jev_lane_host_picks_the_default(self):
+        self.write({"codex": self.CODEX})
+        os.environ[lanes.HOST_ENV] = "codex"
+        try:
+            self.assertEqual(lanes.default_host(), "codex")
+            out = lanes.classify("rename foo to bar", transport=Scripted({"lane": "small"}))
+            self.assertEqual((out["host"], out["target"]["model"]), ("codex", "gpt-small"))
+            os.environ[lanes.HOST_ENV] = "nowhere"
+            self.assertEqual(lanes.default_host(), "claude-code")
+        finally:
+            os.environ.pop(lanes.HOST_ENV, None)
+
+    def test_installed_claude_agents_follow_a_lanes_json_override(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("jev_install_render", REPO / "install.py")
+        install = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(install)
+        self.write({"claude-code": {"small": {"model": "claude-haiku-4-5", "effort": "medium"}}})
+        claude = self.home / ".claude"
+        claude.mkdir()
+        report = install.install_claude(claude, check=False)
+        self.assertEqual(report["lane_models"]["small"], "claude-haiku-4-5")
+        head = (claude / "agents" / "jev-lane-small.md").read_text().split("---")[1]
+        self.assertRegex(head, r"(?m)^model: claude-haiku-4-5$")
+        self.assertRegex(head, r"(?m)^effort: medium$")
+        self.assertIn("(claude-haiku-4-5, medium effort)", head)
+        block = (claude / "CLAUDE.md").read_text()
+        self.assertIn("`jev-lane-small` (claude-haiku-4-5, medium)", block)
+        self.assertIn("`jev-lane-high` (opus, medium)", block)
+
+
 class ClaudeInstall(unittest.TestCase):
     """The installer's Claude Code target: additive, backed up, delimited, removable."""
 

@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from . import decide as engine, lane_replay, lanes, switches
+from . import decide as engine, lane_replay, lanes, paths, switches
 
 FEATURE = "lanes"
 DEFAULT_POLICY = "lane-kanban"
@@ -40,11 +40,11 @@ def root() -> Path:
 
 
 def log_path() -> Path:
-    return root() / "logs" / "jev-lanes.jsonl"
+    return paths.logs_dir(shared=True) / "jev-lanes.jsonl"
 
 
 def cursor_path() -> Path:
-    return root() / "jev" / "lanes-shadow.cursor.json"
+    return paths.config_dir(shared=True) / "lanes-shadow.cursor.json"
 
 
 def _read_cursor() -> Dict[str, Any]:
