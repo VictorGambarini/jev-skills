@@ -263,9 +263,9 @@ export const register: Register = on => {
     const wanted = lane.model ? (MODEL_IDS[lane.model] ?? lane.model) : undefined
     const model = chooseModel(wanted, lastModel ?? e.model, await contextTokens($), MODEL_SWITCH_MAX_TOKENS)
     lastModel = model
+    const effort = NO_EFFORT.test(model) ? undefined : ((lane.effort as typeof e.effort) ?? e.effort)
     shown = { ...shown, lane: lane.lane, effort: effort === undefined ? undefined : String(effort) }
     if (first) await save($)
-    const effort = NO_EFFORT.test(model) ? undefined : ((lane.effort as typeof e.effort) ?? e.effort)
     $.ui.status(`jev: ${lane.lane} · ${model.replace('claude-', '')}${effort ? ' · ' + effort : ''}`)
     return yield* next({ ...e, model, effort })
   })
