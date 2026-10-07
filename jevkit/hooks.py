@@ -245,16 +245,17 @@ def screen_text(event: Mapping[str, Any], *, transport: Any = None) -> Optional[
     """
     mode = switches.mode("hook_screen")
     tool, text = str(event.get("tool") or "WebFetch"), event.get("text")
+    raw = bool(event.get("raw"))  # an MCP result or a command's output: plain text, never a search reply
     if mode == "off" or not isinstance(text, str) or len(text) < SCREEN_MIN_CHARS:
         return None
-    verdict = webscreen.screen(tool, text, send=not _private(), transport=transport)
+    verdict = webscreen.screen(tool, text, send=not _private(), transport=transport, raw=raw)
     flagged = sorted(verdict.get("flagged") or [])
     _log({"kind": "screen", "mode": mode, "tool": tool, "via": "mod", "status": verdict.get("status"),
           "screening": verdict.get("screening"), "units": verdict.get("units"), "flagged": len(flagged),
           "latency_ms": verdict.get("latency_ms")})
     if mode != "on" or not flagged:
         return None
-    _, found = webscreen.units(tool, text)
+    _, found = webscreen.units(tool, text, raw)
     pieces = []
     for index, (_, chunk) in enumerate(found):
         pieces.append(_withhold_sentences(chunk) if index in flagged else chunk)

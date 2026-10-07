@@ -71,3 +71,13 @@ test('compact-jev never keeps half a tool pair from the tail', () => {
   const kept = keepOnly(messages, [0, 2, 3, 4, 5, 6], {}).map(x => messages.indexOf(x))
   expect(kept).toEqual([1, 2, 3, 4, 5, 6])
 })
+
+import { isNetworkCommand } from './policy'
+
+test('Bash output is screened when the command fetches from the network', () => {
+  for (const c of ['curl -s https://x.example', 'wget -qO- https://x', 'cd /tmp && curl x', 'gh api repos/a/b',
+                   'sudo curl x', 'echo $(curl -s x)', 'xh GET x.example', 'https example.org'])
+    expect(isNetworkCommand(c)).toBe(true)
+  for (const c of ['git status', 'ls -la', 'grep curl notes.txt', 'python3 -m pytest', 'cat curl.md', 'echo "use wget"'])
+    expect(isNetworkCommand(c)).toBe(false)
+})

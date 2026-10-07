@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { chooseModel, FOLLOW_UP_MS, keepOnly, sessionLane, type LaneName, type Previous } from './policy'
+import { chooseModel, FOLLOW_UP_MS, isNetworkCommand, keepOnly, sessionLane, type LaneName, type Previous } from './policy'
 
 // jev-router: a cheap decision model (the `jev` command: Jev, or your own backend) makes
 // four decisions inside Claude Code, where settings hooks cannot reach.
@@ -10,8 +10,9 @@ import { chooseModel, FOLLOW_UP_MS, keepOnly, sessionLane, type LaneName, type P
 //                    effort of every step, and the model while the context is small
 //   /compact-jev     a compaction with no summariser: only the turns Jev marks "keep" stay
 //                    (`/compact` itself is left exactly as Claude Code has it)
-//   tool.call        WebFetch / WebSearch text that carries instructions aimed at an AI
-//                    is withheld before the model reads it
+//   tool.call        text that carries instructions aimed at an AI is withheld before the
+//                    model reads it: WebFetch, WebSearch, every MCP tool, and Bash commands
+//                    that fetch from the network (curl, wget, gh api, ...)
 //
 // Every decision fails open: no answer, a timeout or `keep_current` leaves the request as
 // Claude Code would have sent it. After a failure the mod stops asking for COOL_OFF_MS, so a
@@ -149,9 +150,36 @@ async function suggestSkill($: any, text: string, sessionIdValue: string): Promi
   return typeof note === 'string' && note.trim() ? note : null
 }
 
-async function screen($: any, tool: string, text: string): Promise<{ text: string; flagged: number } | null> {
-  const out = await jev($, ['hook', 'screen-text'], JSON.stringify({ tool, text }), 15_000)
+async function screen($: any, tool: string, text: string, raw = false): Promise<{ text: string; flagged: number } | null> {
+  const out = await jev($, ['hook', 'screen-text'], JSON.stringify({ tool, text, raw }), 15_000)
   return out?.text ? out : null
+}
+
+const SCREEN_MIN_CHARS = 200
+const SCREEN_MAX_TEXTS = 8
+
+// Every text an MCP result carries, screened in place: a string, a list of content blocks
+// (`{ type: 'text', text }`), or `{ content: [...] }`. Anything else passes as it came.
+async function screenMcp($: any, tool: string, value: any, budget: { left: number; withheld: number }): Promise<any> {
+  if (budget.left <= 0) return value
+  if (typeof value === 'string') {
+    if (value.length < SCREEN_MIN_CHARS) return value
+    budget.left -= 1
+    const out = await screen($, tool, value, true)
+    if (!out) return value
+    budget.withheld += out.flagged
+    return out.text
+  }
+  if (Array.isArray(value)) {
+    const items = []
+    for (const item of value) items.push(await screenMcp($, tool, item, budget))
+    return items
+  }
+  if (value && typeof value === 'object') {
+    if (value.type === 'text' && typeof value.text === 'string') return { ...value, text: await screenMcp($, tool, value.text, budget) }
+    if (Array.isArray(value.content)) return { ...value, content: await screenMcp($, tool, value.content, budget) }
+  }
+  return value
 }
 
 // /compact-jev, when asked for: the next `plugin` compaction is ours to answer.
@@ -264,6 +292,29 @@ export const register: Register = on => {
     compactJevReport = `kept ${result.messages.length - 1} of ${e.messages.length} messages; nothing was summarised.`
     $.ui.toast(`compact-jev: ${compactJevReport}`)
     return result
+  })
+
+  // MCP tools (a browser's page text, mail, tickets) and Bash commands that fetch from the
+  // network: the same withholding as WebFetch, on text that only looks like data.
+  on('tool.call', async ($, e, next) => {
+    const isMcp = typeof e.tool === 'string' && e.tool.startsWith('mcp__')
+    const isFetch = e.tool === 'Bash' && typeof (e as any).command === 'string' && isNetworkCommand((e as any).command)
+    if (!isMcp && !isFetch) return next(e)
+    const ran: any = await next(e)
+    if (ran.deny !== undefined || ran.isError || ran.result === undefined) return ran
+    if (isFetch) {
+      const stdout = ran.result?.stdout
+      if (typeof stdout !== 'string' || stdout.length < SCREEN_MIN_CHARS) return ran
+      const out = await screen($, 'Bash', stdout, true)
+      if (!out) return ran
+      $.ui.toast(`jev: withheld ${out.flagged} part(s) of a fetched response`)
+      return { ...ran, result: { ...ran.result, stdout: out.text } }
+    }
+    const budget = { left: SCREEN_MAX_TEXTS, withheld: 0 }
+    const result = await screenMcp($, e.tool, ran.result, budget)
+    if (!budget.withheld) return ran
+    $.ui.toast(`jev: withheld ${budget.withheld} part(s) of ${e.tool.replace(/^mcp__/, '')}`)
+    return { ...ran, result }
   })
 
   on('tool.call', { tool: 'WebFetch' }, async ($, e, next) => {

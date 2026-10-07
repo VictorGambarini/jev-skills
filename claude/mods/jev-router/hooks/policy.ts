@@ -107,3 +107,13 @@ export function keepOnly<M extends Msg>(messages: readonly M[], sent: readonly n
   }
   return messages.filter((_, i) => keep.has(i))
 }
+
+// ── which Bash output is someone else's text ─────────────────────────────────
+
+// A command that starts (or pipes into, or runs in a subshell) a network fetcher: its output
+// is a page or an API reply, screened like WebFetch's.
+const NETWORK_COMMAND = /(^|[;&|(`]|\$\()\s*(sudo\s+)?(curl|wget|xh|https?|lynx|w3m|links|aria2c|gh\s+api)\b/
+
+export function isNetworkCommand(command: string): boolean {
+  return NETWORK_COMMAND.test(command)
+}

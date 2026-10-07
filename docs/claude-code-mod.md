@@ -7,8 +7,8 @@ four of those places, each decided by `jev` (Jev, or your own decision backend):
 |---|---|
 | `prompt.submit` (each prompt) | The one installed skill the prompt needs, if any, added as context beside it (`jev hook user-prompt`: same switch, once per skill per session) |
 | `turn.step` (each model request) | The turn's **lane** sets its **effort**, and its **model** while the context is under 40k tokens |
-| `session.compact` (`/compact` and auto-compaction) | The turns `jev compact-select` marks keep go into the summariser's instructions; no message is dropped |
-| `tool.call` on WebFetch / WebSearch | Sentences carrying instructions aimed at an AI are withheld before the model reads them |
+| `/compact-jev` (a slash command) | A compaction with no summariser: only the turns `jev compact-select` marks keep stay, plus the last six and both halves of any kept tool call. `/compact` itself is untouched |
+| `tool.call` on WebFetch, WebSearch, every MCP tool, and Bash commands that fetch from the network | Sentences carrying instructions aimed at an AI are withheld before the model reads them |
 
 ## Install
 
