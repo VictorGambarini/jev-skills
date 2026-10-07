@@ -4,6 +4,7 @@ These never launch a real browser: they pin the flags, the binary lookup, the CD
 poll and the cleanup contract, so a live run is the only thing that needs a
 machine with Chrome on it.
 """
+import _isolate  # noqa: F401 - keep this machine's own decision backend out of the run
 import importlib.util
 import json
 import unittest
@@ -101,9 +102,6 @@ class AllowlistTests(unittest.TestCase):
         self.assertFalse(runner.host_allowed("https://example.com/", ["wikipedia.org"]))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class CredentialFallbackTests(unittest.TestCase):
     """An agent's environment carries no keys. The TypeSafe key fell back to the secret
@@ -187,3 +185,40 @@ class ClaudeCliTextHelperTests(unittest.TestCase):
             self.assertEqual(got["CLAUDE_CLI"], "/x/claude")
             self.assertNotIn("TEXT_MODEL_API_KEY", got)
             self.assertEqual(calls, [])
+
+class NamedBackend(unittest.TestCase):
+    """A named decision backend reaches Ultrafast only through an endpoint it is known to read."""
+
+    def setUp(self):
+        from unittest import mock
+        self.mock = mock
+        patcher = mock.patch.object(runner, "active_backend",
+                                    return_value=("lais", "https://lais.example/v1/systemone", "org/clef", "backend-key-123456789012"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_backend_url_model_and_key_replace_typesafe(self):
+        creds = runner.resolve_credentials({"TYPESAFE_API_KEY": "provider-key-123456789012"}, lookup=lambda *a: None)
+        self.assertEqual(creds[runner.ENDPOINT_ENV], "https://lais.example/v1/systemone")
+        self.assertEqual(creds["TYPESAFE_MODEL"], "org/clef")
+        self.assertEqual(creds["TYPESAFE_API_KEY"], "backend-key-123456789012")
+
+    def test_a_stock_ultrafast_is_never_handed_a_backend_key(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with self.mock.patch.object(runner, "ultrafast_reads_endpoint", return_value=False), \
+                self.mock.patch.object(runner, "ensure_importable") as importable, contextlib.redirect_stdout(out):
+            code = runner.main(["--url", "https://example.org", "--goal", "x", "--allow-hosts", "example.org"])
+        self.assertEqual(code, 2)
+        self.assertIn("would send that backend's key to TypeSafe", out.getvalue())
+        importable.assert_not_called()
+
+    def test_without_a_backend_typesafe_is_unchanged(self):
+        with self.mock.patch.object(runner, "active_backend", return_value=None):
+            creds = runner.resolve_credentials({"TYPESAFE_API_KEY": "provider-key-123456789012"}, lookup=lambda *a: None)
+        self.assertNotIn(runner.ENDPOINT_ENV, creds)
+        self.assertEqual(creds["TYPESAFE_MODEL"], "jev-latest")
+
+if __name__ == "__main__":
+    unittest.main()
