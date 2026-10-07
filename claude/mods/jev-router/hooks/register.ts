@@ -45,10 +45,13 @@ let previous: Previous | null = null              // the last routed turn of the
 let lastModel: string | undefined                 // the model the main thread last ran on
 let table: Table | null = null                    // `jev lane targets`, read once
 let loadedFor: string | null = null               // the session `previous` / `lastModel` belong to
+// What the status line shows for the session (claude/statusline reads the store file).
+let shown: { lane?: string; effort?: string; skill?: string; withheld: number } = { withheld: 0 }
 
 // `previous` and `lastModel` outlive the process: `claude -p --continue`, `--resume` and a
 // restart each start a fresh copy of this module, which would otherwise forget the session.
-type Memory = Record<string, { previous: Previous | null; lastModel?: string; at: number }>
+type Memory = Record<string, { previous: Previous | null; lastModel?: string; at: number;
+                                lane?: string; effort?: string; skill?: string; withheld?: number }>
 const MEMORY_KEY = 'sessions'
 const MEMORY_SESSIONS = 50
 
@@ -67,9 +70,11 @@ async function load($: any): Promise<void> {
     const kept = ((await $.store.get(MEMORY_KEY)) as Memory | undefined)?.[id]
     previous = kept?.previous ?? null
     lastModel = kept?.lastModel
+    shown = { lane: kept?.lane, effort: kept?.effort, skill: kept?.skill, withheld: kept?.withheld ?? 0 }
   } catch {
     previous = null
     lastModel = undefined
+    shown = { withheld: 0 }
   }
 }
 
@@ -77,7 +82,7 @@ async function save($: any): Promise<void> {
   if (loadedFor === null) return
   try {
     const memory = ((await $.store.get(MEMORY_KEY)) as Memory | undefined) ?? {}
-    memory[loadedFor] = { previous, lastModel, at: Date.now() }
+    memory[loadedFor] = { previous, lastModel, at: Date.now(), ...shown }
     const newest = Object.entries(memory).sort(([, a], [, b]) => b.at - a.at).slice(0, MEMORY_SESSIONS)
     await $.store.set(MEMORY_KEY, Object.fromEntries(newest))
   } catch {
@@ -228,6 +233,8 @@ export const register: Register = on => {
     // slower of the two, not their sum.
     const [note, lane] = await Promise.all([suggestSkill($, text, loadedFor ?? ''), classify($, text)])
     remember(preclassified, text, lane)
+    const named = note ? /`([^`]+)`/.exec(note) : null
+    shown = { ...shown, skill: named ? named[1] : undefined }
     if (note) $.ui.toast(note.replace(/^\[Jev skill suggestion\] /, 'jev: ').slice(0, 120))
     return next(note ? { ...e, context: [...(e.context ?? []), note] } : e)
   })
@@ -249,12 +256,14 @@ export const register: Register = on => {
     if (!lane) {
       $.ui.status('jev: as is')
       lastModel = e.model
+      shown = { ...shown, lane: 'as is', effort: e.effort === undefined ? undefined : String(e.effort) }
       if (first) await save($)
       return yield* next(e)
     }
     const wanted = lane.model ? (MODEL_IDS[lane.model] ?? lane.model) : undefined
     const model = chooseModel(wanted, lastModel ?? e.model, await contextTokens($), MODEL_SWITCH_MAX_TOKENS)
     lastModel = model
+    shown = { ...shown, lane: lane.lane, effort: effort === undefined ? undefined : String(effort) }
     if (first) await save($)
     const effort = NO_EFFORT.test(model) ? undefined : ((lane.effort as typeof e.effort) ?? e.effort)
     $.ui.status(`jev: ${lane.lane} · ${model.replace('claude-', '')}${effort ? ' · ' + effort : ''}`)
@@ -307,12 +316,14 @@ export const register: Register = on => {
       if (typeof stdout !== 'string' || stdout.length < SCREEN_MIN_CHARS) return ran
       const out = await screen($, 'Bash', stdout, true)
       if (!out) return ran
-      $.ui.toast(`jev: withheld ${out.flagged} part(s) of a fetched response`)
+      shown.withheld += out.flagged
+    $.ui.toast(`jev: withheld ${out.flagged} part(s) of a fetched response`)
       return { ...ran, result: { ...ran.result, stdout: out.text } }
     }
     const budget = { left: SCREEN_MAX_TEXTS, withheld: 0 }
     const result = await screenMcp($, e.tool, ran.result, budget)
     if (!budget.withheld) return ran
+    shown.withheld += budget.withheld
     $.ui.toast(`jev: withheld ${budget.withheld} part(s) of ${e.tool.replace(/^mcp__/, '')}`)
     return { ...ran, result }
   })
@@ -322,6 +333,7 @@ export const register: Register = on => {
     if (ran.deny !== undefined || ran.isError || typeof ran.result?.result !== 'string') return ran
     const out = await screen($, 'WebFetch', ran.result.result)
     if (!out) return ran
+    shown.withheld += out.flagged
     $.ui.toast(`jev: withheld ${out.flagged} part(s) of a fetched page`)
     return { ...ran, result: { ...ran.result, result: out.text } }
   })
@@ -338,6 +350,7 @@ export const register: Register = on => {
       results.push(out?.text ?? item)
     }
     if (!withheld) return ran
+    shown.withheld += withheld
     $.ui.toast(`jev: withheld ${withheld} part(s) of search results`)
     return { ...ran, result: { ...ran.result, results } }
   })

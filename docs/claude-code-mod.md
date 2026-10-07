@@ -60,3 +60,23 @@ Two tasks, headless, same commit, decisions by Jev through OpenRouter:
 Both passed both ways. That shows the mechanism, not the saving on real work: the open
 question is how often a cheaper lane fails where Opus would not, which a larger benchmark
 with tasks that can fail has to answer.
+
+## Status line
+
+`claude/statusline/statusline.py` is a two-line Claude Code status line:
+
+```text
+jev-skills  main*  │  Opus 5.5  │  ━━━━━━─── 84k/200k 25%  │  $1.23 · 1h05 · +120 −30  │  5h 23% · 7d 41%
+jev  small · haiku 4.5 · low  │  skill release-notes  │  withheld 2  │  jev via openrouter
+```
+
+Line one is the session (folder, branch, model, context, cost, time, lines, rate limits).
+Line two is what jev decided for this session, read from the mod's own store file: the lane,
+model and effort, the last skill suggested, the parts withheld, and the decision backend.
+Without the mod it shows the hook switches instead. It also keeps writing
+`~/.claude/statusline-quota.json` and `statusline-last-payload.json` for anything that polls them.
+
+```bash
+ln -sf ~/github/jev-skills/claude/statusline/statusline.py ~/.claude/jev-statusline.py
+# settings.json: "statusLine": {"type": "command", "command": "~/.claude/jev-statusline.py"}
+```
