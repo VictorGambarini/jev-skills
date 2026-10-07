@@ -173,6 +173,20 @@ class ModSessions(ScreenHook):
             self.assertIsNotNone(hooks.post_tool({**event, "session_id": "s-other"}))
         self.assertEqual(self.log()[-2]["reason"], "mod screens this session")
 
+    def test_skill_suggestions_come_from_the_mod_alone_in_its_sessions(self):
+        switches.set_mode("hook_skills", "on")
+        folder = self.home / ".claude" / "skills" / "release-notes"
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text("---\nname: release-notes\ndescription: Use to write release notes.\n---\nbody")
+        picked = {"status": "ok", "needs_skill": 0.9, "latency_ms": 1, "skills": [{"name": "release-notes", "match": 0.9}]}
+        hooks.mod_session({"session_id": "s-mod"})
+        event = {"prompt": "write the release notes", "session_id": "s-mod", "cwd": str(self.home)}
+        with mock.patch.object(skillpick, "pick", return_value=picked) as pick:
+            self.assertIsNone(hooks.user_prompt(event))
+            pick.assert_not_called()
+            out = hooks.user_prompt({**event, "via": "mod"})
+        self.assertIn("release-notes", out["hookSpecificOutput"]["additionalContext"])
+
     def test_an_old_announcement_expires(self):
         hooks.mod_session({"session_id": "s-old"})
         stamped = json.loads(hooks._mod_sessions_path().read_text())

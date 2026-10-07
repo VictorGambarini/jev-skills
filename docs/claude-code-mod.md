@@ -1,10 +1,11 @@
 # jev-router: a Claude Code mod
 
 A Claude Code mod reaches inside the engine where settings hooks cannot. `jev-router` uses
-three of those places, each decided by `jev` (Jev, or your own decision backend):
+four of those places, each decided by `jev` (Jev, or your own decision backend):
 
 | Where | What it decides |
 |---|---|
+| `prompt.submit` (each prompt) | The one installed skill the prompt needs, if any, added as context beside it (`jev hook user-prompt`: same switch, once per skill per session) |
 | `turn.step` (each model request) | The turn's **lane** sets its **effort**, and its **model** while the context is under 40k tokens |
 | `session.compact` (`/compact` and auto-compaction) | The turns `jev compact-select` marks keep go into the summariser's instructions; no message is dropped |
 | `tool.call` on WebFetch / WebSearch | Sentences carrying instructions aimed at an AI are withheld before the model reads them |
@@ -41,6 +42,7 @@ It needs the `jev` command (`install.py` links it into `~/.local/bin`) and a dec
   `--continue`, `--resume` and restarts carry on where the session was.
 - **Fails open**: no answer means the turn runs as Claude Code would have. After a failed
   call the mod stops asking for five minutes, so a backend that is down costs one timeout.
+- **Skill and lane together**: the skill pick and the lane classification run side by side at submit, so a prompt waits for the slower of the two (about 1 s on a 112-skill catalog), not their sum. Your settings skill hook stands down in sessions the mod handles.
 - **One screen per page**: the mod tells `jev` it screens the session, and the settings
   `PostToolUse` hook stands down there, since it sees the page before the mod withholds anything.
 

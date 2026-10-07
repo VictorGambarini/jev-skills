@@ -2,8 +2,10 @@ import type { Register } from 'claude-code'
 import { chooseModel, FOLLOW_UP_MS, sessionLane, type LaneName, type Previous } from './policy'
 
 // jev-router: a cheap decision model (the `jev` command: Jev, or your own backend) makes
-// three decisions inside Claude Code, where settings hooks cannot reach.
+// four decisions inside Claude Code, where settings hooks cannot reach.
 //
+//   prompt.submit    the one installed skill this prompt needs, if any, as context beside it
+//                    (and the lane read in the same breath, for turn.step)
 //   turn.step        the lane for the turn (small / medium / high / escalate) sets the
 //                    effort of every step, and the model while the context is small
 //   session.compact  the turns Jev marks "keep" go into the summariser's instructions
@@ -34,6 +36,8 @@ type Table = Record<string, { model?: string; effort?: string }>
 
 const prompts = new Map<string, string>()        // turnId -> the person's text
 const decisions = new Map<string, Lane | null>()  // turnId -> the lane (null: run as is)
+const preclassified = new Map<string, LaneName | null>()  // prompt text -> Jev's lane, read at submit
+const SKILL_TIMEOUT_MS = 10_000
 let quietUntil = 0                                // no jev calls before this time (ms)
 let previous: Previous | null = null              // the last routed turn of the main thread
 let lastModel: string | undefined                 // the model the main thread last ran on
@@ -128,10 +132,20 @@ async function decide($: any, text: string): Promise<Lane | null> {
   const now = Date.now()
   const recent = previous !== null && now - previous.at <= FOLLOW_UP_MS
   if (!text.trim()) return recent && previous ? { lane: previous.lane, ...(await lanes($))[previous.lane] } : null
-  const ruled = sessionLane(await classify($, text), previous, text, now)
+  const classified = preclassified.has(text) ? (preclassified.get(text) ?? null) : await classify($, text)
+  const ruled = sessionLane(classified, previous, text, now)
   if (ruled.lane === null) return null
   previous = { lane: ruled.lane, at: now, corrections: ruled.corrections }
   return { lane: ruled.lane, ...(await lanes($))[ruled.lane] }
+}
+
+// The skill suggestion `jev hook user-prompt` makes (its switch, once-per-session repeats and
+// private profiles included), or null. `via: mod` tells the settings hook this one is ours.
+async function suggestSkill($: any, text: string, sessionIdValue: string): Promise<string | null> {
+  const event = { prompt: text, session_id: sessionIdValue, via: 'mod' }
+  const out = await jev($, ['hook', 'user-prompt'], JSON.stringify(event), SKILL_TIMEOUT_MS)
+  const note = out?.hookSpecificOutput?.additionalContext
+  return typeof note === 'string' && note.trim() ? note : null
 }
 
 async function screen($: any, tool: string, text: string): Promise<{ text: string; flagged: number } | null> {
@@ -156,6 +170,20 @@ async function contextTokens($: any): Promise<number> {
 }
 
 export const register: Register = on => {
+  on('prompt.submit', async ($, e, next) => {
+    const text = e.text
+    if (!text.trim() || text.trimStart().startsWith('/')) return next(e)
+    // Before `next`: the settings hooks run beneath it, and must already know the mod has the
+    // session (load announces it), or they would suggest a skill of their own.
+    await load($)
+    // The skill pick and the lane are independent: both at once, so the prompt waits for the
+    // slower of the two, not their sum.
+    const [note, lane] = await Promise.all([suggestSkill($, text, loadedFor ?? ''), classify($, text)])
+    remember(preclassified, text, lane)
+    if (note) $.ui.toast(note.replace(/^\[Jev skill suggestion\] /, 'jev: ').slice(0, 120))
+    return next(note ? { ...e, context: [...(e.context ?? []), note] } : e)
+  })
+
   on('turn.start', async ($, e, next) => {
     remember(prompts, e.turnId, e.text)
     return next(e)

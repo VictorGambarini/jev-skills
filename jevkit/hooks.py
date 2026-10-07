@@ -89,6 +89,11 @@ def user_prompt(event: Mapping[str, Any], *, transport: Any = None) -> Optional[
     prompt = event.get("prompt")
     if mode == "off" or not isinstance(prompt, str) or not prompt.strip() or prompt.lstrip().startswith("/"):
         return None  # a slash command already names what it runs
+    # In a session the jev-router mod handles, the mod asks (with "via": "mod") and the settings
+    # hook stands down, so a turn never gets the same suggestion twice.
+    if event.get("via") != "mod" and str(event.get("session_id") or "") in _mod_sessions():
+        _log({"kind": "skill", "mode": mode, "status": "skipped", "reason": "mod suggests in this session"})
+        return None
     if _private():
         _log({"kind": "skill", "mode": mode, "status": "skipped", "reason": "private profile"})
         return None
