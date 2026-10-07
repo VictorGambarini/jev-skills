@@ -89,6 +89,11 @@ def user_prompt(event: Mapping[str, Any], *, transport: Any = None) -> Optional[
     prompt = event.get("prompt")
     if mode == "off" or not isinstance(prompt, str) or not prompt.strip() or prompt.lstrip().startswith("/"):
         return None  # a slash command already names what it runs
+    # In a session the jev-router mod handles, the mod asks (with "via": "mod") and the settings
+    # hook stands down, so a turn never gets the same suggestion twice.
+    if event.get("via") != "mod" and str(event.get("session_id") or "") in _mod_sessions():
+        _log({"kind": "skill", "mode": mode, "status": "skipped", "reason": "mod suggests in this session"})
+        return None
     if _private():
         _log({"kind": "skill", "mode": mode, "status": "skipped", "reason": "private profile"})
         return None
@@ -131,10 +136,50 @@ def _result_text(response: Any) -> Optional[str]:
     return None
 
 
+# Sessions where the jev-router mod screens web results itself (`jev hook mod-session`). There
+# the settings hook stays out: it sees the result before the mod withholds anything, so its
+# warning would quote the very text the mod keeps from the model.
+MOD_SESSION_TTL_S = 24 * 3600
+
+
+def _mod_sessions_path() -> Path:
+    return paths.logs_dir() / "jev-mod-sessions.json"
+
+
+def _mod_sessions() -> Dict[str, float]:
+    try:
+        data = json.loads(_mod_sessions_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    now = time.time()
+    return {k: float(v) for k, v in data.items() if isinstance(v, (int, float)) and now - float(v) < MOD_SESSION_TTL_S} \
+        if isinstance(data, dict) else {}
+
+
+def mod_session(event: Mapping[str, Any], *, transport: Any = None) -> Optional[Dict[str, Any]]:
+    """The mod announces a session it screens: `{"session_id": "..."}` in, `{"ok": true}` out."""
+    session = str(event.get("session_id") or "").strip()
+    if not session:
+        return None
+    sessions = _mod_sessions()
+    sessions[session] = time.time()
+    newest = dict(sorted(sessions.items(), key=lambda kv: kv[1])[-SESSION_MEMORY:])
+    try:
+        path = _mod_sessions_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(newest), encoding="utf-8")
+    except OSError:
+        return None
+    return {"ok": True}
+
+
 def post_tool(event: Mapping[str, Any], *, transport: Any = None) -> Optional[Dict[str, Any]]:
     mode = switches.mode("hook_screen")
     tool = event.get("tool_name")
     if mode == "off" or tool not in SCREEN_TOOLS:
+        return None
+    if str(event.get("session_id") or "") in _mod_sessions():
+        _log({"kind": "screen", "mode": mode, "tool": tool, "status": "skipped", "reason": "mod screens this session"})
         return None
     text = _result_text(event.get("tool_response"))
     if not text or len(text) < SCREEN_MIN_CHARS:
@@ -232,7 +277,8 @@ def _withhold_sentences(chunk: str) -> str:
 
 # ── entry point ──────────────────────────────────────────────────────────────
 
-HANDLERS = {"user-prompt": user_prompt, "post-tool": post_tool, "screen-text": screen_text}
+HANDLERS = {"user-prompt": user_prompt, "post-tool": post_tool, "screen-text": screen_text,
+            "mod-session": mod_session}
 
 
 def run(event_name: str, stdin: Any = None, stdout: Any = None) -> int:

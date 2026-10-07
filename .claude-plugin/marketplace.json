@@ -1,0 +1,14 @@
+{
+  "name": "jev-skills",
+  "description": "Claude Code mods from Jev Skills: decisions made by a cheap decision model, Jev or your own",
+  "owner": {
+    "name": "Victor Gambarini"
+  },
+  "plugins": [
+    {
+      "name": "jev-router",
+      "source": "./claude/mods/jev-router",
+      "description": "A decision model picks each turn's model and effort, what compaction keeps, and withholds injected web text"
+    }
+  ]
+}

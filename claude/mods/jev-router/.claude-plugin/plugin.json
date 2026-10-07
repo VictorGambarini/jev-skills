@@ -1,1 +1,8 @@
-{ "name": "jev-router", "version": "0.1.0", "description": "Jev decides each turn's model and effort, what compaction must keep, and withholds injected web text" }
+{
+  "name": "jev-router",
+  "version": "0.3.0",
+  "description": "Jev picks each turn's skill, model and effort, what compaction keeps, and withholds injected web text",
+  "author": {
+    "name": "Victor Gambarini"
+  }
+}

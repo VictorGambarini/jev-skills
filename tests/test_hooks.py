@@ -160,6 +160,40 @@ class ScreenText(Base):
         with mock.patch.object(webscreen, "screen", return_value={"status": "ok", "flagged": [], "units": 1}):
             self.assertIsNone(hooks.screen_text({"text": self.PAGE}))
 
+
+class ModSessions(ScreenHook):
+    def test_a_session_the_mod_screens_gets_no_second_warning(self):
+        switches.set_mode("hook_screen", "on")
+        verdict = {"status": "ok", "flagged": [0], "units": 3, "screening": "jev"}
+        event = {**self.event(), "session_id": "s-mod"}
+        self.assertEqual(hooks.mod_session({"session_id": "s-mod"}), {"ok": True})
+        with mock.patch.object(webscreen, "screen", return_value=verdict) as screen:
+            self.assertIsNone(hooks.post_tool(event))
+            screen.assert_not_called()
+            self.assertIsNotNone(hooks.post_tool({**event, "session_id": "s-other"}))
+        self.assertEqual(self.log()[-2]["reason"], "mod screens this session")
+
+    def test_skill_suggestions_come_from_the_mod_alone_in_its_sessions(self):
+        switches.set_mode("hook_skills", "on")
+        folder = self.home / ".claude" / "skills" / "release-notes"
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text("---\nname: release-notes\ndescription: Use to write release notes.\n---\nbody")
+        picked = {"status": "ok", "needs_skill": 0.9, "latency_ms": 1, "skills": [{"name": "release-notes", "match": 0.9}]}
+        hooks.mod_session({"session_id": "s-mod"})
+        event = {"prompt": "write the release notes", "session_id": "s-mod", "cwd": str(self.home)}
+        with mock.patch.object(skillpick, "pick", return_value=picked) as pick:
+            self.assertIsNone(hooks.user_prompt(event))
+            pick.assert_not_called()
+            out = hooks.user_prompt({**event, "via": "mod"})
+        self.assertIn("release-notes", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_an_old_announcement_expires(self):
+        hooks.mod_session({"session_id": "s-old"})
+        stamped = json.loads(hooks._mod_sessions_path().read_text())
+        stamped["s-old"] -= hooks.MOD_SESSION_TTL_S + 1
+        hooks._mod_sessions_path().write_text(json.dumps(stamped))
+        self.assertNotIn("s-old", hooks._mod_sessions())
+
 class Install(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
