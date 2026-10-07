@@ -75,13 +75,17 @@ def _load(result: str) -> Any:
         return None
 
 
-def units(tool: str, result: str) -> Tuple[Any, List[Tuple[Tuple[Any, ...], str]]]:
+def units(tool: str, result: str, raw: bool = False) -> Tuple[Any, List[Tuple[Tuple[Any, ...], str]]]:
     """``(parsed, [(where, text), ...])``: every screenable text field and where it lives.
 
     ``where`` is a path into ``parsed`` (a JSON result) or ``("raw", n)`` for the n-th chunk
     of a result that is not JSON. Titles, descriptions and page content are screened; URLs
     are left to the local screen's link rules via the text they appear in.
     """
+    if raw:
+        # Text that only looks like a search reply (an MCP tool's JSON, a curl body) is read as
+        # plain text, so screening never rebuilds it in a shape it did not have.
+        return None, [(("raw", number), piece) for number, piece in enumerate(chunks(result))]
     parsed = _load(result)
     found: List[Tuple[Tuple[Any, ...], str]] = []
     if isinstance(parsed, dict) and isinstance((parsed.get("data") or {}).get("web"), list):
@@ -109,7 +113,7 @@ def units(tool: str, result: str) -> Tuple[Any, List[Tuple[Tuple[Any, ...], str]
 
 def screen(tool: str, result: str, *, send: bool = True, timeout: float = 4.0,
            transport: Optional[client.Transport] = None,
-           also_ask: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
+           also_ask: Optional[Callable[[str], str]] = None, raw: bool = False) -> Dict[str, Any]:
     """Which parts of ``result`` carry instructions aimed at an AI assistant.
 
     ``send=False`` is for a profile whose content must not leave the machine: the local
@@ -132,7 +136,7 @@ def screen(tool: str, result: str, *, send: bool = True, timeout: float = 4.0,
     nothing about it.
     """
     try:
-        _, found = units(tool, result)
+        _, found = units(tool, result, raw)
     except Exception as error:  # noqa: BLE001 - a malformed result must not break the tool call
         return {"status": "fail_open", "screening": rerank.NONE, "reason": type(error).__name__,
                 "units": 0, "flagged": [], "local": []}

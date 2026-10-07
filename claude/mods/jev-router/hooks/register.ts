@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { chooseModel, FOLLOW_UP_MS, sessionLane, type LaneName, type Previous } from './policy'
+import { chooseModel, FOLLOW_UP_MS, isNetworkCommand, keepOnly, sessionLane, type LaneName, type Previous } from './policy'
 
 // jev-router: a cheap decision model (the `jev` command: Jev, or your own backend) makes
 // four decisions inside Claude Code, where settings hooks cannot reach.
@@ -8,9 +8,11 @@ import { chooseModel, FOLLOW_UP_MS, sessionLane, type LaneName, type Previous } 
 //                    (and the lane read in the same breath, for turn.step)
 //   turn.step        the lane for the turn (small / medium / high / escalate) sets the
 //                    effort of every step, and the model while the context is small
-//   session.compact  the turns Jev marks "keep" go into the summariser's instructions
-//   tool.call        WebFetch / WebSearch text that carries instructions aimed at an AI
-//                    is withheld before the model reads it
+//   /compact-jev     a compaction with no summariser: only the turns Jev marks "keep" stay
+//                    (`/compact` itself is left exactly as Claude Code has it)
+//   tool.call        text that carries instructions aimed at an AI is withheld before the
+//                    model reads it: WebFetch, WebSearch, every MCP tool, and Bash commands
+//                    that fetch from the network (curl, wget, gh api, ...)
 //
 // Every decision fails open: no answer, a timeout or `keep_current` leaves the request as
 // Claude Code would have sent it. After a failure the mod stops asking for COOL_OFF_MS, so a
@@ -43,10 +45,13 @@ let previous: Previous | null = null              // the last routed turn of the
 let lastModel: string | undefined                 // the model the main thread last ran on
 let table: Table | null = null                    // `jev lane targets`, read once
 let loadedFor: string | null = null               // the session `previous` / `lastModel` belong to
+// What the status line shows for the session (claude/statusline reads the store file).
+let shown: { lane?: string; effort?: string; skill?: string; withheld: number } = { withheld: 0 }
 
 // `previous` and `lastModel` outlive the process: `claude -p --continue`, `--resume` and a
 // restart each start a fresh copy of this module, which would otherwise forget the session.
-type Memory = Record<string, { previous: Previous | null; lastModel?: string; at: number }>
+type Memory = Record<string, { previous: Previous | null; lastModel?: string; at: number;
+                                lane?: string; effort?: string; skill?: string; withheld?: number }>
 const MEMORY_KEY = 'sessions'
 const MEMORY_SESSIONS = 50
 
@@ -65,9 +70,11 @@ async function load($: any): Promise<void> {
     const kept = ((await $.store.get(MEMORY_KEY)) as Memory | undefined)?.[id]
     previous = kept?.previous ?? null
     lastModel = kept?.lastModel
+    shown = { lane: kept?.lane, effort: kept?.effort, skill: kept?.skill, withheld: kept?.withheld ?? 0 }
   } catch {
     previous = null
     lastModel = undefined
+    shown = { withheld: 0 }
   }
 }
 
@@ -75,7 +82,7 @@ async function save($: any): Promise<void> {
   if (loadedFor === null) return
   try {
     const memory = ((await $.store.get(MEMORY_KEY)) as Memory | undefined) ?? {}
-    memory[loadedFor] = { previous, lastModel, at: Date.now() }
+    memory[loadedFor] = { previous, lastModel, at: Date.now(), ...shown }
     const newest = Object.entries(memory).sort(([, a], [, b]) => b.at - a.at).slice(0, MEMORY_SESSIONS)
     await $.store.set(MEMORY_KEY, Object.fromEntries(newest))
   } catch {
@@ -148,20 +155,66 @@ async function suggestSkill($: any, text: string, sessionIdValue: string): Promi
   return typeof note === 'string' && note.trim() ? note : null
 }
 
-async function screen($: any, tool: string, text: string): Promise<{ text: string; flagged: number } | null> {
-  const out = await jev($, ['hook', 'screen-text'], JSON.stringify({ tool, text }), 15_000)
+async function screen($: any, tool: string, text: string, raw = false): Promise<{ text: string; flagged: number } | null> {
+  const out = await jev($, ['hook', 'screen-text'], JSON.stringify({ tool, text, raw }), 15_000)
   return out?.text ? out : null
 }
 
-async function keepList($: any, messages: { role: string; content: string }[]): Promise<string[]> {
-  const out = await jev($, ['compact-select'], JSON.stringify({ messages }), 30_000)
-  const fates: Record<string, string> = out?.fates ?? {}
-  return Object.entries(fates)
-    .filter(([, fate]) => fate === 'keep')
-    .map(([index]) => messages[Number(index)])
-    .filter(Boolean)
-    .slice(-20)
-    .map(m => `- (${m.role}) ${m.content.replace(/\s+/g, ' ').slice(0, 240)}`)
+const SCREEN_MIN_CHARS = 200
+const SCREEN_MAX_TEXTS = 8
+
+// Every text an MCP result carries, screened in place: a string, a list of content blocks
+// (`{ type: 'text', text }`), or `{ content: [...] }`. Anything else passes as it came.
+async function screenMcp($: any, tool: string, value: any, budget: { left: number; withheld: number }): Promise<any> {
+  if (budget.left <= 0) return value
+  if (typeof value === 'string') {
+    if (value.length < SCREEN_MIN_CHARS) return value
+    budget.left -= 1
+    const out = await screen($, tool, value, true)
+    if (!out) return value
+    budget.withheld += out.flagged
+    return out.text
+  }
+  if (Array.isArray(value)) {
+    const items = []
+    for (const item of value) items.push(await screenMcp($, tool, item, budget))
+    return items
+  }
+  if (value && typeof value === 'object') {
+    if (value.type === 'text' && typeof value.text === 'string') return { ...value, text: await screenMcp($, tool, value.text, budget) }
+    if (Array.isArray(value.content)) return { ...value, content: await screenMcp($, tool, value.content, budget) }
+  }
+  return value
+}
+
+// /compact-jev, when asked for: the next `plugin` compaction is ours to answer.
+let compactJevPending = false
+let compactJevReport = ''
+const COMPACT_JEV_MARK = '[compact-jev: keep only what Jev marks keep]'
+const COMPACT_TIMEOUT_MS = 120_000
+
+// The conversation with only what Jev marks keep (policy.keepOnly), or a reason it was not cut.
+async function compactJev($: any, messages: readonly any[]): Promise<{ messages: any[] } | { skip: string }> {
+  const sent: number[] = []
+  const toJev: { role: string; content: string }[] = []
+  messages.forEach((m, i) => {
+    if (typeof m.text === 'string' && m.text.trim()) { sent.push(i); toJev.push({ role: m.role, content: m.text }) }
+  })
+  if (toJev.length === 0) return { skip: 'nothing to judge' }
+  const out = await jev($, ['compact-select'], JSON.stringify({ messages: toJev }), COMPACT_TIMEOUT_MS)
+  if (!out?.fates || out.status === 'fail_open') return { skip: 'Jev did not answer; nothing was removed' }
+  if (out.status === 'partial') return { skip: 'Jev judged only part of the conversation; nothing was removed' }
+  const kept = keepOnly(messages, sent, out.fates)
+  if (kept.length === messages.length) return { skip: 'Jev marked every turn keep; nothing to remove' }
+  const note = {
+    role: 'user',
+    text: `[compact-jev] Earlier parts of this conversation were removed by a decision model, which kept ` +
+      `${kept.length} of ${messages.length} messages: the ones it judged to carry decisions, constraints, exact ` +
+      `values or unfinished work, plus the most recent. Nothing was summarised. If something you need is ` +
+      `missing, ask for it rather than guessing.`,
+    toolUses: [],
+  }
+  return { messages: [note, ...kept] }
 }
 
 async function contextTokens($: any): Promise<number> {
@@ -180,6 +233,8 @@ export const register: Register = on => {
     // slower of the two, not their sum.
     const [note, lane] = await Promise.all([suggestSkill($, text, loadedFor ?? ''), classify($, text)])
     remember(preclassified, text, lane)
+    const named = note ? /`([^`]+)`/.exec(note) : null
+    shown = { ...shown, skill: named ? named[1] : undefined }
     if (note) $.ui.toast(note.replace(/^\[Jev skill suggestion\] /, 'jev: ').slice(0, 120))
     return next(note ? { ...e, context: [...(e.context ?? []), note] } : e)
   })
@@ -201,33 +256,76 @@ export const register: Register = on => {
     if (!lane) {
       $.ui.status('jev: as is')
       lastModel = e.model
+      shown = { ...shown, lane: 'as is', effort: e.effort === undefined ? undefined : String(e.effort) }
       if (first) await save($)
       return yield* next(e)
     }
     const wanted = lane.model ? (MODEL_IDS[lane.model] ?? lane.model) : undefined
     const model = chooseModel(wanted, lastModel ?? e.model, await contextTokens($), MODEL_SWITCH_MAX_TOKENS)
     lastModel = model
-    if (first) await save($)
     const effort = NO_EFFORT.test(model) ? undefined : ((lane.effort as typeof e.effort) ?? e.effort)
+    shown = { ...shown, lane: lane.lane, effort: effort === undefined ? undefined : String(effort) }
+    if (first) await save($)
     $.ui.status(`jev: ${lane.lane} · ${model.replace('claude-', '')}${effort ? ' · ' + effort : ''}`)
     return yield* next({ ...e, model, effort })
   })
 
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'compact-jev',
+      description: 'Compact with no summary: keep only the turns Jev marks keep (plus the last few)',
+    })
+    return next(e)
+  })
+
+  // A command's own hook may not compact (the turn it holds would be compacted under it), so
+  // /compact-jev queues the built-in /compact with a marker, from a timer outside any turn,
+  // and the session.compact hook below answers that one compaction without the summariser.
+  on('command.run', { command: 'compact-jev' }, async $ => {
+    compactJevPending = true
+    $.clock.after(0, () => {
+      $.command.run({ command: 'compact', args: COMPACT_JEV_MARK }).catch(() => { compactJevPending = false })
+    })
+    return { text: 'compact-jev: asking Jev which turns to keep; nothing will be summarised.' }
+  })
+
+  // Only the compaction /compact-jev queued. /compact and auto-compaction pass untouched.
   on('session.compact', async ($, e, next) => {
-    if (e.trigger === 'precompute' || e.agentId) return next(e)
-    const messages = e.messages
-      .map(m => ({ role: m.role, content: m.text }))
-      .filter(m => m.content && m.content.trim())
-    const keep = await keepList($, messages)
-    if (!keep.length) return next(e)
-    const instructions = [
-      e.instructions,
-      'Keep the substance of these turns in the summary (decisions, constraints, exact values, ' +
-        'paths, ids, commands and unfinished work), quoting exact values where they matter:',
-      ...keep,
-    ].filter(Boolean).join('\n')
-    $.ui.toast(`jev: ${keep.length} turns marked keep for this compaction`)
-    return next({ ...e, instructions })
+    if (!compactJevPending || !(e.instructions ?? '').includes(COMPACT_JEV_MARK) || e.agentId) return next(e)
+    compactJevPending = false
+    const result = await compactJev($, e.messages)
+    if ('skip' in result) {
+      $.ui.toast(`compact-jev: ${result.skip}.`)
+      return result
+    }
+    compactJevReport = `kept ${result.messages.length - 1} of ${e.messages.length} messages; nothing was summarised.`
+    $.ui.toast(`compact-jev: ${compactJevReport}`)
+    return result
+  })
+
+  // MCP tools (a browser's page text, mail, tickets) and Bash commands that fetch from the
+  // network: the same withholding as WebFetch, on text that only looks like data.
+  on('tool.call', async ($, e, next) => {
+    const isMcp = typeof e.tool === 'string' && e.tool.startsWith('mcp__')
+    const isFetch = e.tool === 'Bash' && typeof (e as any).command === 'string' && isNetworkCommand((e as any).command)
+    if (!isMcp && !isFetch) return next(e)
+    const ran: any = await next(e)
+    if (ran.deny !== undefined || ran.isError || ran.result === undefined) return ran
+    if (isFetch) {
+      const stdout = ran.result?.stdout
+      if (typeof stdout !== 'string' || stdout.length < SCREEN_MIN_CHARS) return ran
+      const out = await screen($, 'Bash', stdout, true)
+      if (!out) return ran
+      shown.withheld += out.flagged
+    $.ui.toast(`jev: withheld ${out.flagged} part(s) of a fetched response`)
+      return { ...ran, result: { ...ran.result, stdout: out.text } }
+    }
+    const budget = { left: SCREEN_MAX_TEXTS, withheld: 0 }
+    const result = await screenMcp($, e.tool, ran.result, budget)
+    if (!budget.withheld) return ran
+    shown.withheld += budget.withheld
+    $.ui.toast(`jev: withheld ${budget.withheld} part(s) of ${e.tool.replace(/^mcp__/, '')}`)
+    return { ...ran, result }
   })
 
   on('tool.call', { tool: 'WebFetch' }, async ($, e, next) => {
@@ -235,6 +333,7 @@ export const register: Register = on => {
     if (ran.deny !== undefined || ran.isError || typeof ran.result?.result !== 'string') return ran
     const out = await screen($, 'WebFetch', ran.result.result)
     if (!out) return ran
+    shown.withheld += out.flagged
     $.ui.toast(`jev: withheld ${out.flagged} part(s) of a fetched page`)
     return { ...ran, result: { ...ran.result, result: out.text } }
   })
@@ -251,6 +350,7 @@ export const register: Register = on => {
       results.push(out?.text ?? item)
     }
     if (!withheld) return ran
+    shown.withheld += withheld
     $.ui.toast(`jev: withheld ${withheld} part(s) of search results`)
     return { ...ran, result: { ...ran.result, results } }
   })
