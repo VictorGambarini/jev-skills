@@ -21,7 +21,7 @@ import datetime
 import json
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
-from . import client, privacy, rerank
+from . import client, privacy, rerank, tuning
 
 # The same ceiling the memory filter uses, and for the same reason: past this, results
 # are reported as unread rather than silently dropped.
@@ -170,7 +170,7 @@ def gate(
     top_k: int = DEFAULT_TOP_K,
     relevance_threshold: float = 0.5,
     injection_threshold: float = 0.5,
-    sufficiency_threshold: float = SUFFICIENCY_THRESHOLD,
+    sufficiency_threshold: Optional[float] = None,
     reading_failed: bool = False,
     timeout: float = 6.0,
     transport: Optional[client.Transport] = None,
@@ -303,7 +303,8 @@ def gate(
         else:
             enough = float(reply["answers"]["enough"]["noul"])
             result["sufficiency"] = round(enough, 3)
-            result["sufficient"] = enough >= sufficiency_threshold
+            result["sufficient"] = enough >= (tuning.value("search.sufficiency_threshold", SUFFICIENCY_THRESHOLD)
+                                              if sufficiency_threshold is None else sufficiency_threshold)
             _take_next_query(result, reply, options)
             _add_usage(result, ranked, reply)
 

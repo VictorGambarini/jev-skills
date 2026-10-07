@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__, backends, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, paths, plan, rerank, replay, route, search, skillpick, spend, supervise, triage
+from . import __version__, backends, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, paths, plan, policy as policy_mod, rerank, replay, route, search, skillpick, spend, supervise, triage, tuning
 
 
 def _stdin_json() -> Any:
@@ -196,6 +196,43 @@ def cmd_backend(args: argparse.Namespace) -> int:
             return _out({"default": backends.load_file().get("default")})
         if args.action == "remove":
             return _out({"removed": backends.remove(args.name)})
+        if args.action == "tune":
+            if not args.rest:
+                current = dict(backends.get(args.name).tuning)
+                return _out({"backend": args.name, "knobs": {
+                    key: {"jev_default": spec[0], "range": [spec[1], spec[2]], "gates": spec[3],
+                          **({"set": current[key]} if key in current else {})}
+                    for key, spec in tuning.KNOBS.items()}})
+            changes: Dict[str, Any] = {}
+            for pair in args.rest:
+                key, sep, raw = pair.partition("=")
+                if not sep:
+                    raise backends.BackendError(f"{pair!r}: use key=value, or key=default to clear")
+                try:
+                    changes[key] = None if raw == "default" else float(raw)
+                except ValueError:
+                    raise backends.BackendError(f"{pair!r}: the value must be a number or `default`") from None
+            tuned = backends.tune(args.name, changes)
+            return _out({"backend": tuned.name, "tuning": dict(tuned.tuning)})
+        if args.action == "policy":
+            if len(args.rest) != 1:
+                raise backends.BackendError("`jev backend policy <backend> <policy>` copies one policy")
+            chosen = backends.get(args.name)
+            try:
+                source = policy_mod.locate(args.rest[0])
+            except policy_mod.PolicyError as error:
+                raise backends.BackendError(str(error)) from None
+            target = backends.policy_dir(chosen.name) / f"{source.stem}.json"
+            if target.exists() and not args.force:
+                raise backends.BackendError(f"{target} exists; pass --force to replace it")
+            data = json.loads(source.read_text(encoding="utf-8"))
+            data["tuned_on"] = chosen.model
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            return _out({"backend": chosen.name, "policy": source.stem, "copied_from": str(source),
+                         "written": str(target), "tuned_on": chosen.model,
+                         "note": "this copy now wins while the backend is active; edit its thresholds "
+                                 "to what this backend's own eval supports"})
         chosen = backends.get(args.name)
     except backends.BackendError as error:
         _out({"error": str(error)})
@@ -802,8 +839,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_setup_key)
 
     p = sub.add_parser("backend", help="named decision backends: your own systemone-compatible server instead of Jev")
-    p.add_argument("action", choices=["list", "add", "use", "remove", "test"])
+    p.add_argument("action", choices=["list", "add", "use", "remove", "test", "tune", "policy"])
     p.add_argument("name", nargs="?", help="backend name (lowercase, digits, dashes); `use default` returns to Jev")
+    p.add_argument("rest", nargs="*", help="tune: key=value pairs (value `default` clears; none lists the knobs); "
+                                           "policy: the policy name to copy for this backend")
+    p.add_argument("--force", action="store_true", help="policy: replace this backend's existing copy")
     p.add_argument("--url", help="add: the full endpoint, like https://host/v1/systemone")
     p.add_argument("--model", help="add: the model id the backend answers with")
     p.add_argument("--protocol", default="systemone", choices=list(backends.PROTOCOLS))

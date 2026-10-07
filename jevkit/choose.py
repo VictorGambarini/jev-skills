@@ -12,7 +12,7 @@ import os
 import re
 from typing import Any, Dict, List, Mapping, Optional
 
-from . import client, privacy
+from . import client, privacy, tuning
 
 REQUEST_SCHEMA = "jev.action_choice_request_v1"
 RESPONSE_SCHEMA = "jev.action_choice_v1"
@@ -72,6 +72,25 @@ def _floor() -> float:
 
 
 MIN_CONFIDENCE = _floor()
+_IMPORTED_FLOOR = MIN_CONFIDENCE
+# What a caller writes in `history[].outcome` when an action did nothing. Free text, so read
+# loosely; only ever used to stop, never to act.
+NO_EFFECT = re.compile(r"\bno (visible |observable )?(change|effect)\b|\bunchanged\b|did not change|"
+                       r"didn'?t change|nothing happened|no response", re.IGNORECASE)
+
+
+def floor() -> float:
+    """The floor in force: JEV_MIN_CONFIDENCE or a caller's own MIN_CONFIDENCE first, then the
+    active backend's tuning, then Jev's measured 0.65."""
+    if os.environ.get("JEV_MIN_CONFIDENCE") or MIN_CONFIDENCE != _IMPORTED_FLOOR:
+        return MIN_CONFIDENCE
+    return tuning.value("choose.min_confidence", MIN_CONFIDENCE)
+
+
+def dead_repeats(history: List[Mapping[str, str]], selected: str) -> int:
+    """How many times ``selected`` was already tried and the caller saw nothing happen."""
+    return sum(1 for entry in history
+               if entry.get("selected_id") == selected and NO_EFFECT.search(entry.get("outcome") or ""))
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
 
@@ -144,6 +163,12 @@ def choose(request: Mapping[str, Any], *, timeout: float = 3.0, mock: bool = Fal
     except client.JevError as error:
         return answer("reobserve", 0.0, f"Jev unavailable ({error.code})")
     picked = reply["answers"]["next_action"]
-    if picked["confidence"] < MIN_CONFIDENCE:
+    # Code first: an action already tried and seen to do nothing is not tried again, however
+    # sure the model is. Measured: clef-flash clicked a dead link a fourth time at 0.94
+    # (evals/backends/SCORECARD-2026-10-07-clef-flash.md); no floor can catch a sure answer.
+    limit = int(tuning.value("choose.dead_repeats"))
+    if picked["choice"] not in ("reobserve", "abstain") and dead_repeats(valid["history"], picked["choice"]) >= limit:
+        return answer("abstain", picked["confidence"], "already tried with no visible effect", picked["probabilities"])
+    if picked["confidence"] < floor():
         return answer("reobserve", picked["confidence"], "low confidence", picked["probabilities"])
     return answer(picked["choice"], picked["confidence"], "chosen", picked["probabilities"])

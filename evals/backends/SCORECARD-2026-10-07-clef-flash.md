@@ -79,3 +79,20 @@ picks. Median latency 398 ms (11 skills), 1.5 s (112 skills).
   failure in the history** (choose), and **over-reports `needs_skill`** on an ordinary editing
   turn. Both are single cases; neither is a rate.
 - The shipped thresholds were tuned on Jev and were not re-tuned here.
+
+## After the dead-action guard (same day)
+
+`choose` now abstains, before any floor, when the pick was already tried
+`choose.dead_repeats` times (default 2) with an outcome that says nothing happened. It is
+code deciding from a fact the caller already has, so it applies to every backend, Jev
+included. `scripts/calibrate_choose.py` on clef-flash, re-run:
+
+| at the shipped 0.65 floor | right | stalled | declined ok | **WRONG** |
+|---|---|---|---|---|
+| Jev (published) | 22-23 | 1 | 7 | **0** |
+| clef-flash, before | 23 | 1 | 6 | **1** |
+| clef-flash, with the guard | 23 | 1 | 7 | **0** |
+
+No threshold was changed for clef-flash. The skill-selection miss (`needs_skill` 0.78 on a
+no-skill turn) is one case; raising `skillpick.need_threshold` to clear it would also drop
+right answers at 0.76-0.78, so it stays at Jev's 0.5 until there are more cases.

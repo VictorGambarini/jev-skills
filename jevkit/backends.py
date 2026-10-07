@@ -27,7 +27,9 @@ import re
 import urllib.parse
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
+
+from . import tuning as tuning_mod
 
 BACKEND_ENV = "JEV_BACKEND"
 CONFIG_ENV = "JEV_BACKENDS"
@@ -54,6 +56,7 @@ class Backend:
     model: str
     protocol: str = "systemone"
     key_env: str = ""
+    tuning: Tuple[Tuple[str, float], ...] = ()   # see tuning.KNOBS; kept hashable
 
     @property
     def key_variable(self) -> str:
@@ -63,6 +66,7 @@ class Backend:
         """What `jev backend list` and `jev doctor` show. No key, ever."""
         out = asdict(self)
         out["key_env"] = self.key_variable
+        out["tuning"] = dict(self.tuning)
         return out
 
 
@@ -111,8 +115,15 @@ def _parse(name: str, raw: Any) -> Backend:
     key_env = raw.get("key_env") or ""
     if key_env and (not isinstance(key_env, str) or not _KEY_ENV.fullmatch(key_env)):
         raise BackendError(f"backend {name!r}: key_env must be an UPPER_CASE variable name")
+    raw_tuning = raw.get("tuning") or {}
+    if not isinstance(raw_tuning, Mapping):
+        raise BackendError(f"backend {name!r}: tuning must be an object")
+    try:
+        tuned = tuning_mod.check(raw_tuning)
+    except ValueError as error:
+        raise BackendError(f"backend {name!r}: {error}") from None
     return Backend(name=name, url=check_url(str(raw.get("url") or "")), model=model.strip(),
-                   protocol=protocol, key_env=key_env)
+                   protocol=protocol, key_env=key_env, tuning=tuple(sorted(tuned.items())))
 
 
 def load_file(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -179,8 +190,13 @@ def add(name: str, url: str, model: str, protocol: str = "systemone", key_env: s
     entry: Dict[str, Any] = {"protocol": protocol, "url": url, "model": model}
     if key_env:
         entry["key_env"] = key_env
+    previous = data["backends"].get(name) or {}
+    if isinstance(previous, Mapping) and previous.get("tuning"):
+        entry["tuning"] = previous["tuning"]  # re-adding to change the URL or model keeps the tuning
     backend = _parse(name, entry)  # validate before anything is written
-    data["backends"][name] = {k: v for k, v in asdict(backend).items() if k != "name" and v}
+    data["backends"][name] = {k: v for k, v in asdict(backend).items() if k not in ("name", "tuning") and v}
+    if backend.tuning:
+        data["backends"][name]["tuning"] = dict(backend.tuning)
     if make_default or not data.get("default"):
         data["default"] = name
     save(data)
@@ -196,6 +212,34 @@ def remove(name: str) -> bool:
         data["default"] = None
     save(data)
     return True
+
+
+def tune(name: str, changes: Mapping[str, Optional[float]]) -> Backend:
+    """Set (or, with None, clear) tuning keys on one backend; validated before it is written."""
+    data = load_file()
+    if name not in data["backends"]:
+        raise BackendError(f"no backend named {name!r} in {config_path()}")
+    entry = dict(data["backends"][name])
+    current = dict(entry.get("tuning") or {})
+    for key, value in changes.items():
+        if value is None:
+            current.pop(key, None)
+        else:
+            current[key] = value
+    if current:
+        entry["tuning"] = current
+    else:
+        entry.pop("tuning", None)
+    backend = _parse(name, entry)
+    data["backends"][name] = entry
+    save(data)
+    return backend
+
+
+def policy_dir(name: str) -> Path:
+    """Where a backend's own copies of policies live; they win while it is the active backend."""
+    from . import paths  # noqa: PLC0415
+    return paths.config_dir(shared=True) / "backends" / name / "policies"
 
 
 def use(name: Optional[str]) -> None:
