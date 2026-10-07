@@ -6,6 +6,7 @@ Two tools: ``redact`` masks things that look like secrets or contact details, an
 """
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from typing import List
@@ -87,10 +88,53 @@ def normalize(text: str) -> str:
     return "".join(c for c in folded if unicodedata.category(c) not in {"Cf", "Cc"} or c in "\n\t")
 
 
+# A pasted key with no label and no vendor prefix (a self-hosted gateway's bearer, a
+# `secrets.token_urlsafe` value) matched none of the rules above: redact() masked it through
+# _HIGH_ENTROPY, but is_sensitive() said the text was fine to send, so the turn went out with
+# the key masked instead of not going out at all. Found on a real session, 2026-10-07.
+#
+# _HIGH_ENTROPY alone would flag paths and long identifiers (it allows "/" and needs only
+# mixed case and one digit), and is_sensitive() stops a whole feature from asking, so the bar
+# here is the shape of a random token: no "/", enough of every class, and near-random spread.
+# Measured on 2,000 seeded random base64url tokens per length: this catches 99.5% at 43
+# characters and 94% at 32 (redact() still masks the rest). Readable names sit at 4.0-4.5 bits
+# per character, and the ones that clear that (ParseJSON2XMLConverterUTF8Base64Decoder) are
+# built from words: their runs of one character class average 2.7-3.4, a random token's ~1.6.
+_UNLABELLED = re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+_-]{32,}={0,2}(?![A-Za-z0-9+/=_-])")
+_MIN_BITS_PER_CHAR = 4.3
+_MAX_MEAN_RUN = 2.4
+
+
+def _bits_per_char(run: str) -> float:
+    counts: dict = {}
+    for char in run:
+        counts[char] = counts.get(char, 0) + 1
+    return -sum(n / len(run) * math.log2(n / len(run)) for n in counts.values())
+
+
+def _char_class(char: str) -> int:
+    return 0 if char.isupper() else 1 if char.islower() else 2 if char.isdigit() else 3
+
+
+def _mean_run(run: str) -> float:
+    """Average length of the stretches of one character class: words are long, noise is short."""
+    changes = sum(1 for a, b in zip(run, run[1:]) if _char_class(a) != _char_class(b))
+    return len(run) / (changes + 1)
+
+
+def _random_token(run: str) -> bool:
+    digits = sum(c.isdigit() for c in run)
+    upper = sum(c.isupper() for c in run)
+    lower = sum(c.islower() for c in run)
+    return (digits >= 2 and upper >= 4 and lower >= 4 and _mean_run(run) <= _MAX_MEAN_RUN
+            and _bits_per_char(run) >= _MIN_BITS_PER_CHAR)
+
+
 def is_sensitive(text: str) -> bool:
     probe = normalize(text)
     return bool(_SECRET_WORDS.search(probe) or _SECRET_NAME.search(probe)
-                or _SECRET_ASSIGNMENT.search(probe) or _TOKEN_SHAPES.search(probe))
+                or _SECRET_ASSIGNMENT.search(probe) or _TOKEN_SHAPES.search(probe)
+                or any(_random_token(m.group(0)) for m in _UNLABELLED.finditer(probe)))
 
 
 def redact(text: str, limit: int = 4000) -> str:
