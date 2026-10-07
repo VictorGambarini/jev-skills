@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { chooseModel, FOLLOW_UP_MS, sessionLane, type LaneName, type Previous } from './policy'
+import { chooseModel, FOLLOW_UP_MS, keepOnly, sessionLane, type LaneName, type Previous } from './policy'
 
 // jev-router: a cheap decision model (the `jev` command: Jev, or your own backend) makes
 // four decisions inside Claude Code, where settings hooks cannot reach.
@@ -8,7 +8,8 @@ import { chooseModel, FOLLOW_UP_MS, sessionLane, type LaneName, type Previous } 
 //                    (and the lane read in the same breath, for turn.step)
 //   turn.step        the lane for the turn (small / medium / high / escalate) sets the
 //                    effort of every step, and the model while the context is small
-//   session.compact  the turns Jev marks "keep" go into the summariser's instructions
+//   /compact-jev     a compaction with no summariser: only the turns Jev marks "keep" stay
+//                    (`/compact` itself is left exactly as Claude Code has it)
 //   tool.call        WebFetch / WebSearch text that carries instructions aimed at an AI
 //                    is withheld before the model reads it
 //
@@ -153,15 +154,34 @@ async function screen($: any, tool: string, text: string): Promise<{ text: strin
   return out?.text ? out : null
 }
 
-async function keepList($: any, messages: { role: string; content: string }[]): Promise<string[]> {
-  const out = await jev($, ['compact-select'], JSON.stringify({ messages }), 30_000)
-  const fates: Record<string, string> = out?.fates ?? {}
-  return Object.entries(fates)
-    .filter(([, fate]) => fate === 'keep')
-    .map(([index]) => messages[Number(index)])
-    .filter(Boolean)
-    .slice(-20)
-    .map(m => `- (${m.role}) ${m.content.replace(/\s+/g, ' ').slice(0, 240)}`)
+// /compact-jev, when asked for: the next `plugin` compaction is ours to answer.
+let compactJevPending = false
+let compactJevReport = ''
+const COMPACT_JEV_MARK = '[compact-jev: keep only what Jev marks keep]'
+const COMPACT_TIMEOUT_MS = 120_000
+
+// The conversation with only what Jev marks keep (policy.keepOnly), or a reason it was not cut.
+async function compactJev($: any, messages: readonly any[]): Promise<{ messages: any[] } | { skip: string }> {
+  const sent: number[] = []
+  const toJev: { role: string; content: string }[] = []
+  messages.forEach((m, i) => {
+    if (typeof m.text === 'string' && m.text.trim()) { sent.push(i); toJev.push({ role: m.role, content: m.text }) }
+  })
+  if (toJev.length === 0) return { skip: 'nothing to judge' }
+  const out = await jev($, ['compact-select'], JSON.stringify({ messages: toJev }), COMPACT_TIMEOUT_MS)
+  if (!out?.fates || out.status === 'fail_open') return { skip: 'Jev did not answer; nothing was removed' }
+  if (out.status === 'partial') return { skip: 'Jev judged only part of the conversation; nothing was removed' }
+  const kept = keepOnly(messages, sent, out.fates)
+  if (kept.length === messages.length) return { skip: 'Jev marked every turn keep; nothing to remove' }
+  const note = {
+    role: 'user',
+    text: `[compact-jev] Earlier parts of this conversation were removed by a decision model, which kept ` +
+      `${kept.length} of ${messages.length} messages: the ones it judged to carry decisions, constraints, exact ` +
+      `values or unfinished work, plus the most recent. Nothing was summarised. If something you need is ` +
+      `missing, ask for it rather than guessing.`,
+    toolUses: [],
+  }
+  return { messages: [note, ...kept] }
 }
 
 async function contextTokens($: any): Promise<number> {
@@ -213,21 +233,37 @@ export const register: Register = on => {
     return yield* next({ ...e, model, effort })
   })
 
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'compact-jev',
+      description: 'Compact with no summary: keep only the turns Jev marks keep (plus the last few)',
+    })
+    return next(e)
+  })
+
+  // A command's own hook may not compact (the turn it holds would be compacted under it), so
+  // /compact-jev queues the built-in /compact with a marker, from a timer outside any turn,
+  // and the session.compact hook below answers that one compaction without the summariser.
+  on('command.run', { command: 'compact-jev' }, async $ => {
+    compactJevPending = true
+    $.clock.after(0, () => {
+      $.command.run({ command: 'compact', args: COMPACT_JEV_MARK }).catch(() => { compactJevPending = false })
+    })
+    return { text: 'compact-jev: asking Jev which turns to keep; nothing will be summarised.' }
+  })
+
+  // Only the compaction /compact-jev queued. /compact and auto-compaction pass untouched.
   on('session.compact', async ($, e, next) => {
-    if (e.trigger === 'precompute' || e.agentId) return next(e)
-    const messages = e.messages
-      .map(m => ({ role: m.role, content: m.text }))
-      .filter(m => m.content && m.content.trim())
-    const keep = await keepList($, messages)
-    if (!keep.length) return next(e)
-    const instructions = [
-      e.instructions,
-      'Keep the substance of these turns in the summary (decisions, constraints, exact values, ' +
-        'paths, ids, commands and unfinished work), quoting exact values where they matter:',
-      ...keep,
-    ].filter(Boolean).join('\n')
-    $.ui.toast(`jev: ${keep.length} turns marked keep for this compaction`)
-    return next({ ...e, instructions })
+    if (!compactJevPending || !(e.instructions ?? '').includes(COMPACT_JEV_MARK) || e.agentId) return next(e)
+    compactJevPending = false
+    const result = await compactJev($, e.messages)
+    if ('skip' in result) {
+      $.ui.toast(`compact-jev: ${result.skip}.`)
+      return result
+    }
+    compactJevReport = `kept ${result.messages.length - 1} of ${e.messages.length} messages; nothing was summarised.`
+    $.ui.toast(`compact-jev: ${compactJevReport}`)
+    return result
   })
 
   on('tool.call', { tool: 'WebFetch' }, async ($, e, next) => {
