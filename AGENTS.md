@@ -14,7 +14,7 @@ A person pointed you here to give their agent Jev. Follow these steps in order. 
    git clone https://github.com/kerpopule/hermes-jev-skills ~/hermes-jev-skills
    ```
 
-2. **Preview, then install.** Show the person what `--check` reports before running the real thing. It detects Hermes, Claude Code and Codex and installs for each. On Hermes it installs every plugin this repo ships (`hermes-jev` for routing, `hermes-handoff` for end-of-session capsules) plus `scripts/nightly-handoff.py` under the Hermes home, and edits one list (`plugins.enabled`) in each `config.yaml`, with a timestamped backup beside it.
+2. **Preview, then install.** Show the person what `--check` reports before running the real thing. It detects Hermes, Claude Code, Codex, Gemini CLI and OpenCode and installs for each, writing the fewest skill folders that reach all of them. On Hermes it installs every plugin this repo ships (`hermes-jev` for routing, `hermes-handoff` for end-of-session capsules) plus `scripts/nightly-handoff.py` under the Hermes home, and edits one list (`plugins.enabled`) in each `config.yaml`, with a timestamped backup beside it.
 
    ```bash
    python3 ~/hermes-jev-skills/install.py --check

@@ -139,6 +139,10 @@ def targets(host: Optional[str] = None) -> Dict[str, Dict[str, str]]:
     out = {lane: dict(spec) for lane, spec in TARGETS.get(host, {}).items()}
     for lane in LANES:
         out.setdefault(lane, {})
+        if host != "hermes":
+            # Every subagent harness gets the same file names (install.py writes them), so a
+            # lane names the agent to delegate to whatever the harness is.
+            out[lane].setdefault("agent", f"jev-lane-{lane}")
     for data in _local_tables():
         for lane, spec in (data.get(host) or {}).items() if isinstance(data.get(host), dict) else ():
             if lane in out and isinstance(spec, dict):

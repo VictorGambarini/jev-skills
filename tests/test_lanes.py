@@ -211,7 +211,8 @@ class AnyHarness(TempHome):
     def test_a_complete_table_adds_a_harness(self):
         self.write({"codex": self.CODEX})
         self.assertIn("codex", lanes.hosts())
-        self.assertEqual(lanes.targets("codex")["escalate"], {"model": "gpt-escalate", "effort": "medium"})
+        self.assertEqual(lanes.targets("codex")["escalate"],
+                         {"model": "gpt-escalate", "effort": "medium", "agent": "jev-lane-escalate"})
 
     def test_an_incomplete_table_is_not_a_harness(self):
         self.write({"codex": {"small": {"model": "gpt-small"}}, "Bad Name": self.CODEX})
