@@ -23,6 +23,18 @@ The key can come from any of three places, and the same Jev answers either way:
 
 If more than one key exists, TypeSafe is used: an existing install never starts routing its decisions somewhere else because an OpenRouter or Zen key happened to be in the environment for a text model. To pick a different one on purpose, set `JEV_PROVIDER=openrouter` or `JEV_PROVIDER=zen` in the environment the commands run in; it is honoured only when that provider actually has a key here, and an unset or unknown value changes nothing. `jev doctor` reports which one is in use under `key.provider`.
 
+## Your own decision model (a named backend)
+
+Any server that answers the same `POST /v1/systemone` request (state + typed questions in, validated `choice` / `score` / `noul` answers out) can take Jev's place. Name it once:
+
+```bash
+jev backend add mymodel --url https://host.example/v1/systemone --model org/model-id
+jev setup-key --backend mymodel     # private page, same rules as above; or export JEV_BACKEND_MYMODEL_API_KEY
+jev backend test mymodel            # one fixed question; shows the validated answers
+```
+
+The first backend added becomes the default (`~/.config/jev/backends.json`), so every `jev` command and the Hermes plugin send decisions there. `JEV_BACKEND=<name>` picks one for a single shell, `JEV_BACKEND=default` or `jev backend use default` returns to the built-in providers. A backend's key is read only from its own variable, secret-store entry or file and is sent only to its own URL; a provider key is never sent to a backend. If the selected backend is missing or misconfigured, every feature fails open (`backend_misconfigured`) instead of quietly asking Jev. `jev doctor` names the backend and warns that the shipped thresholds were tuned on Jev, not on it.
+
 ## Rules
 
 - Never ask the person to paste the key into the chat. If they paste one anyway, do not store it, do not repeat it, tell them that key should be replaced, and start the flow below.

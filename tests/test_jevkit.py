@@ -1,4 +1,5 @@
 """Offline tests. No network, no real secret store: every Jev reply is a fake transport."""
+import _isolate  # noqa: F401 - keep this machine's own decision backend out of the run
 import json
 import os
 import sys

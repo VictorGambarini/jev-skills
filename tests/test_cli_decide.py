@@ -1,6 +1,7 @@
 """The new `jev` subcommands keep the CLI's contract: JSON out, bad input exit 2, Jev down exit 0."""
 from __future__ import annotations
 
+import _isolate  # noqa: F401 - keep this machine's own decision backend out of the run
 import contextlib
 import io
 import json

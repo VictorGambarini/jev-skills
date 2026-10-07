@@ -1238,7 +1238,7 @@ def main(argv: list[str] | None = None) -> int:
     # relabels an OpenRouter/Venice secret and sends it to the TypeSafe endpoint.
     try:
         from jevkit import keystore
-        available = keystore.provider() != "absent"
+        available = bool(keystore.describe()["present"])  # a provider key, or a named backend's
     except Exception:  # noqa: BLE001 - broken lookup must not crash the loop
         available = False
     if not available and not os.environ.get("TYPESAFE_BASE_URL", "").strip():

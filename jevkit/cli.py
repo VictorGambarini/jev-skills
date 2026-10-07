@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, plan, rerank, replay, route, search, skillpick, spend, supervise, triage
+from . import __version__, backends, catalog, choose, cli_decide, cli_lane, client, compact, key_setup, keystore, ladder, mailbox, memo, plan, rerank, replay, route, search, skillpick, spend, supervise, triage
 
 
 def _stdin_json() -> Any:
@@ -42,6 +42,12 @@ def cmd_setup_key(args: argparse.Namespace) -> int:
     hermes_home = Path(args.hermes_home).expanduser() if args.hermes_home else None
     common = {"verify": not args.no_verify, "hermes": not args.no_hermes, "hermes_home": hermes_home,
               "provider": args.provider}
+    if args.backend:
+        try:
+            common["backend"] = backends.get(args.backend)
+        except backends.BackendError as error:
+            _out({"status": "rejected", "reason": str(error)})
+            return 1
     if args.tty:
         result = key_setup.run_tty(**common)
     else:
@@ -168,6 +174,47 @@ def _override_endpoint() -> Optional[Dict[str, Any]]:
             "bearer": client.PROXY_KEY_ENV if client._proxy_key() else None}
 
 
+def cmd_backend(args: argparse.Namespace) -> int:
+    try:
+        if args.action == "list":
+            data = backends.load_file()
+            chosen = backends.active()
+            return _out({"config": str(backends.config_path()), "default": data.get("default"),
+                         "active": chosen.name if chosen else "built-in Jev providers",
+                         "backends": [b.public() for b in backends.load().values()]})
+        if not args.name:
+            raise backends.BackendError(f"`jev backend {args.action}` needs a backend name")
+        if args.action == "add":
+            if not args.url or not args.model:
+                raise backends.BackendError("`jev backend add` needs --url and --model")
+            added = backends.add(args.name, args.url, args.model, args.protocol, args.key_env,
+                                 make_default=not args.no_default)
+            return _out({"added": added.public(), "default": backends.load_file().get("default"),
+                         "next": f"jev setup-key --backend {added.name}   (or export {added.key_variable})"})
+        if args.action == "use":
+            backends.use(None if args.name in ("default", "none") else args.name)
+            return _out({"default": backends.load_file().get("default")})
+        if args.action == "remove":
+            return _out({"removed": backends.remove(args.name)})
+        chosen = backends.get(args.name)
+    except backends.BackendError as error:
+        _out({"error": str(error)})
+        return 1
+    # test: one fixed question, so a person can see their server answer the protocol correctly.
+    try:
+        reply = client.ask("The build finished and all tests passed.",
+                           {"ok": client.noul("The text reports a successful outcome"),
+                            "kind": client.choice("What kind of event is this?",
+                                                  {"success": "Something worked", "failure": "Something broke"})},
+                           backend=chosen, timeout=15)
+    except client.JevError as error:
+        _out({"backend": chosen.name, "ok": False, "error": error.code, "server_said": str(error),
+              "key_present": bool(keystore.backend_key(chosen))})
+        return 1
+    return _out({"backend": chosen.name, "ok": True, "model": reply["jev_model"],
+                 "latency_ms": reply["latency_ms"], "answers": reply["answers"]})
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     report: Dict[str, Any] = {"version": __version__, "key": keystore.describe()}
     override = _override_endpoint()
@@ -179,9 +226,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         try:
             reply = client.ask("The build finished and all tests passed.",
                                {"ok": client.noul("The text reports a successful outcome")}, timeout=10)
-            report["jev"] = {"reachable": True, "latency_ms": reply["latency_ms"]}
+            report["jev"] = {"reachable": True, "latency_ms": reply["latency_ms"],
+                             "model": reply["jev_model"], "provider": reply["provider"]}
         except client.JevError as error:
             report["jev"] = {"reachable": False, "error": error.code}
+    if report["key"].get("backend"):
+        # Every shipped threshold was tuned on Jev's calibration. Another model's confidences
+        # are not the same numbers, so its gates and routing are untested until re-measured.
+        report.setdefault("warnings", []).append(
+            f"decisions go to backend {report['key']['provider']!r}, not Jev; the shipped policy thresholds "
+            f"were tuned on jev-1.13.0 and have not been measured on this model (see evals/)")
     config = route.load_config()
     report["routing"] = {"config": str(route.config_path()),
                          # This is the PRIVACY mode (what is sent), not the on/shadow/off
@@ -734,6 +788,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "through OpenRouter, which is one key instead of two if you already use it; venice "
                         "reaches it through Venice, where the decision model is currently free; zen reaches "
                         "it through OpenCode Zen, which has a free tier")
+    p.add_argument("--backend", help="store the key for a named backend from `jev backend add` instead of a provider")
     p.add_argument("--tty", action="store_true", help="hidden terminal prompt instead of a browser page")
     p.add_argument("--host", default="127.0.0.1", help="bind address; keep loopback unless you are on a private network")
     p.add_argument("--port", type=int, default=0)
@@ -743,6 +798,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-hermes", action="store_true", help="do not write the key into Hermes lane .env files")
     p.add_argument("--hermes-home")
     p.set_defaults(func=cmd_setup_key)
+
+    p = sub.add_parser("backend", help="named decision backends: your own systemone-compatible server instead of Jev")
+    p.add_argument("action", choices=["list", "add", "use", "remove", "test"])
+    p.add_argument("name", nargs="?", help="backend name (lowercase, digits, dashes); `use default` returns to Jev")
+    p.add_argument("--url", help="add: the full endpoint, like https://host/v1/systemone")
+    p.add_argument("--model", help="add: the model id the backend answers with")
+    p.add_argument("--protocol", default="systemone", choices=list(backends.PROTOCOLS))
+    p.add_argument("--key-env", default="", help="add: the variable that holds its key (default JEV_BACKEND_<NAME>_API_KEY)")
+    p.add_argument("--no-default", action="store_true", help="add: do not make it the default")
+    p.set_defaults(func=cmd_backend)
 
     p = sub.add_parser("doctor", help="is the key present, does Jev answer, and do the routing pools waste money")
     p.add_argument("--offline", action="store_true")

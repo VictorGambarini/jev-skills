@@ -16,13 +16,14 @@ import secrets
 import sys
 import threading
 import time
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
-from . import client, keystore
+from . import backends, client, keystore
 
 KEYS_URL = "https://console.typesafe.ai/settings/keys"
 # Jev is also served through OpenRouter, which is one key instead of two for anyone already
@@ -69,9 +70,50 @@ def _render(body: str) -> bytes:
     return _PAGE.replace("__BODY__", body).encode("utf-8")
 
 
+# What a failed check means, in words a person at the key page can act on. Only "auth_failed"
+# says the key itself is wrong; every other code is about the server or the reply.
+_BACKEND_FAILURES = {
+    "auth_failed": "refused that key",
+    "timeout": "did not answer in time",
+    "network": "could not be reached",
+    "malformed": "answered in a shape this client cannot read",
+    "invalid_response": "answered, but the answer contradicted itself",
+    "rate_limited": "is rate limiting",
+    "overloaded": "is overloaded",
+}
+
+
+def _pages(provider: str, backend: Optional["backends.Backend"]) -> Any:
+    """(label, where keys come from, that host) for the form. A backend's keys come from its own host."""
+    if backend is not None:
+        origin = urllib.parse.urlsplit(backend.url)
+        return f"{backend.name} backend", f"{origin.scheme}://{origin.netloc}/", origin.hostname or backend.name
+    return PROVIDER_PAGES.get(provider, PROVIDER_PAGES["typesafe"])
+
+
 def _finish(key: str, verify: bool, hermes: bool, hermes_home: Optional[Path],
-            provider: str = "typesafe") -> Dict[str, Any]:
-    label = PROVIDER_PAGES.get(provider, PROVIDER_PAGES["typesafe"])[0]
+            provider: str = "typesafe", backend: Optional["backends.Backend"] = None) -> Dict[str, Any]:
+    label = _pages(provider, backend)[0]
+    if backend is not None:
+        # A backend's key goes to its own store entry only, never into Hermes .env files under
+        # a provider's variable: those are read as provider keys.
+        if not keystore.looks_like_key(key):
+            raise ValueError("that does not look like an API key")
+        problem = client.backend_key_error(key, backend) if verify else None
+        if problem is not None and problem.code == "auth_failed":
+            return {"status": "rejected", "error": problem.code,
+                    "reason": f"{label} {_BACKEND_FAILURES['auth_failed']} ({problem.code})"}
+        # Anything but auth_failed is about the server or the request, not the key: storing it
+        # lets `jev backend test` show what the server objects to instead of a dead end here.
+        verified_b: Optional[bool] = (problem is None) if verify else None
+        result = keystore.store_backend(key, backend)
+        result.update({"status": "stored", "verified": verified_b})
+        if problem is not None:
+            why = _BACKEND_FAILURES.get(problem.code) or (
+                "answered with a server error" if problem.code.startswith("http_5") else "refused the check request")
+            result["check_error"] = problem.code
+            result["warning"] = f"key stored, but {label} {why} ({problem.code}); run `jev backend test {backend.name}`"
+        return result
     verified: Optional[bool] = client.verify_key(key, provider=provider) if verify else None
     if verified is False:
         return {"status": "rejected", "reason": f"{label} did not accept that key"}
@@ -83,9 +125,9 @@ def _finish(key: str, verify: bool, hermes: bool, hermes_home: Optional[Path],
 def run_browser(
     *, host: str = "127.0.0.1", port: int = 0, timeout: float = 600.0, open_browser: bool = True,
     verify: bool = True, hermes: bool = True, hermes_home: Optional[Path] = None,
-    provider: str = "typesafe",
+    provider: str = "typesafe", backend: Optional["backends.Backend"] = None,
 ) -> Dict[str, Any]:
-    label, keys_url, keys_host = PROVIDER_PAGES.get(provider, PROVIDER_PAGES["typesafe"])
+    label, keys_url, keys_host = _pages(provider, backend)
 
     def form(error: str = "") -> bytes:
         return _render(_FORM.replace("__ERROR__", error).replace("__KEYS__", keys_url)
@@ -139,7 +181,7 @@ def run_browser(
             fields = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
             key = (fields.get("key") or [""])[0].strip()
             try:
-                result = _finish(key, verify, hermes, hermes_home, provider)
+                result = _finish(key, verify, hermes, hermes_home, provider, backend)
             except ValueError as error:
                 result = {"status": "rejected", "reason": str(error)}
             except Exception as error:  # noqa: BLE001
@@ -153,6 +195,8 @@ def run_browser(
                 self._send(200, form(message))
                 return
             note = f" and checked with {label}" if result.get("verified") else ""
+            if result.get("warning"):
+                note += f", but {html.escape(result['warning'].split(', but ', 1)[-1])}"
             self._send(200, _render(_DONE.replace("__VERIFIED__", note)))
             outcome.update(result)
             done.set()
@@ -178,7 +222,7 @@ def run_browser(
             opened = False
     # The URL holds no secret; it is safe for an agent to relay to its person.
     print(json.dumps({"status": "waiting", "url": url, "browser_opened": opened,
-                      "say": "Open this page on the computer running your agent and paste your TypeSafe key there."}),
+                      "say": f"Open this page on the computer running your agent and paste your {label} key there."}),
           file=sys.stderr, flush=True)
     finished = done.wait(timeout)
     time.sleep(0.3)  # let the success page flush before the listener goes away
@@ -188,12 +232,12 @@ def run_browser(
 
 
 def run_tty(*, verify: bool = True, hermes: bool = True, hermes_home: Optional[Path] = None,
-            provider: str = "typesafe") -> Dict[str, Any]:
+            provider: str = "typesafe", backend: Optional["backends.Backend"] = None) -> Dict[str, Any]:
     if not sys.stdin.isatty():
         return {"status": "rejected", "reason": "no terminal; use the browser flow"}
-    label = PROVIDER_PAGES.get(provider, PROVIDER_PAGES["typesafe"])[0]
+    label = _pages(provider, backend)[0]
     key = getpass.getpass(f"{label} API key (hidden): ").strip()
     try:
-        return _finish(key, verify, hermes, hermes_home, provider)
+        return _finish(key, verify, hermes, hermes_home, provider, backend)
     except ValueError as error:
         return {"status": "rejected", "reason": str(error)}

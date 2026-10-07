@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Named decision backends** (`jev backend add|use|list|remove|test`, `jev setup-key --backend`): any server that speaks the systemone protocol can replace Jev, selected by `JEV_BACKEND` or the default in `~/.config/jev/backends.json`. Each backend's key is stored under its own name and sent only to its own URL; no provider key is ever forwarded to one. A missing or broken selection fails open as `backend_misconfigured` rather than falling back to Jev. Backend calls bill $0 in the ledger, and `jev doctor` warns that policy thresholds are untuned on a non-Jev model. Tests pin the built-in providers so a machine's own backend config cannot leak into the suite.
 - Installer: preserve the canonical shared skill directory and aliases instead of replacing its source with self-referencing symlinks; regression tests cover both destructive edge cases.
 
 - **One copy of each skill on a machine**: once Hermes is installed, Claude Code, Codex and `~/.agents` skill folders get symlinks to `<hermes root>/skills/jev/<skill>` instead of their own copies, so all three read the same files; copies remain the fallback without Hermes or symlinks. Tests cover link, re-run and no-Hermes cases.

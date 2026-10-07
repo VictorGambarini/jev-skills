@@ -57,6 +57,9 @@ def cost(input_tokens: Optional[int], provider: Optional[str] = None,
     tokens = int(input_tokens or 0)
     listed = round(tokens * USD_PER_INPUT_TOKEN, 8)
     free = (jev_model or "") in FREE_MODELS or (provider == "zen" and (jev_model or "").endswith("-free"))
+    # A named backend (backends.py) is someone's own server: nothing here knows its price, so
+    # it bills nothing. list_usd still says what the same call would have cost on Jev.
+    free = free or bool(provider) and provider not in ("typesafe", "openrouter", "venice", "zen", "custom")
     return {"cost_usd": 0.0 if free else listed, "list_usd": listed}
 
 
