@@ -113,7 +113,7 @@ class CompactionBatchingTests(unittest.TestCase):
         def record(body, headers, timeout):
             request = json.loads(body)
             sizes.append(len(json.dumps(request["state"], separators=(",", ":"))))
-            return json.dumps({"answers": {name: choice_answer(question, "summarize")
+            return json.dumps({"answers": {name: choice_answer(question, "keep")
                                for name, question in request["questions"].items()}, "usage": {}}).encode()
         out = self.run_select(self.cjk(), record)
         self.assertTrue(sizes)
@@ -132,14 +132,14 @@ class CompactionBatchingTests(unittest.TestCase):
             if len(seen) == 1:
                 raise client.JevError("state_too_large")
             request = json.loads(body)
-            return json.dumps({"answers": {name: choice_answer(question, "summarize")
+            return json.dumps({"answers": {name: choice_answer(question, "keep")
                                for name, question in request["questions"].items()}, "usage": {}}).encode()
         out = self.run_select(self.cjk(), flaky)
         self.assertEqual(out["status"], "partial")
         self.assertIn("state_too_large", out["errors"])
         self.assertTrue(out["unjudged"])
         for index in out["unjudged"]:
-            self.assertEqual(out["fates"][str(index)], "summarize")
+            self.assertEqual(out["fates"][str(index)], "keep")
 
     def test_every_batch_failing_is_still_fail_open_and_nothing_is_dropped(self):
         def broken(body, headers, timeout):

@@ -879,7 +879,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("rerank", help="filter retrieved memory passages")
     p.set_defaults(func=cmd_rerank)
 
-    p = sub.add_parser("compact-select", help="mark each transcript turn keep / summarize / drop")
+    p = sub.add_parser("compact-select", help="mark each transcript turn keep / drop")
     p.add_argument("--keep-last", type=int, default=6)
     p.add_argument("--digest", action="store_true", help="also return the reduced transcript for the summarizer")
     p.set_defaults(func=cmd_compact)

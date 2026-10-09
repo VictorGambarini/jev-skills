@@ -1,6 +1,6 @@
 # Compaction eval
 
-Does letting Jev mark each turn keep / summarize / drop make a better handoff than not
+Does letting Jev mark each turn keep / drop (it was keep / summarize / drop when the scorecard was measured) make a better handoff than not
 doing that? This measures it on your own sessions. The result on ours is in
 [results/](results/).
 
@@ -31,9 +31,9 @@ For each exported session:
 | `plugin_fallback` | the last N characters of the dialogue, every line tagged `[background]`. What the plugin does when Jev is unavailable |
 | `tail_plain` | the same text, with a prompt that asks for exact values and mentions no markers. The fair free baseline |
 | `jev` | `compact.select` then `compact.digest`. What shipped through 0.13.2 |
-| `recency_matched` | Jev's keep / summarize / drop **counts**, assigned by recency instead of by Jev. Same budget, same mechanism, no judgement: the gap between this and `jev` is what Jev's judgement is worth |
+| `recency_matched` | Jev's keep / drop **counts**, assigned by recency instead of by Jev. Same budget, same mechanism, no judgement: the gap between this and `jev` is what Jev's judgement is worth |
 | `regex_keep` | keep any turn holding an identifier-shaped string. Free |
-| `failopen` | every turn `summarize`, the last eight kept. What a Jev outage gives |
+| `failopen` | every turn kept whole. What a Jev outage gives |
 | `*_v2` | the same selections through an alternative digest (keep lines first, identifiers swept from clipped text). It measured worse and was not shipped; it lives only in the eval |
 | `full` | the whole dialogue. The ceiling for a capsule of this size |
 | `none` | no capsule, search only |

@@ -1,14 +1,16 @@
 """Compaction and handoffs: Jev marks what survives, a text model only writes it up.
 
 Jev cannot summarize. What it can do, in one fast request per 40 turns, is mark each turn
-as something to carry forward word for word, to clip, or to drop. It judges a long turn on
-its first and last 350 characters, redacted, and sees no other turn while it does.
+keep or drop, nothing in between. It judges a long turn on its first and last 350
+characters, redacted, and sees no other turn while it does. When in doubt a turn is kept,
+and a kept turn is kept whole: there is no clipped middle fate and no summariser.
 
 What that is worth was measured (evals/compaction, seven real sessions, 104 questions):
 Jev's marks beat the same number of marks handed out by recency, 11 questions to 4, so the
 judgement is real. But a handoff written from the digest built on those marks recalled less
-than one written from the plain tail of the same size, 4 to 15. The clipping costs more
-than the judgement earns. Use `select` to choose turns when a budget forces a choice; do
+than one written from the plain tail of the same size, 4 to 15. The clipping (the old
+"summarize" fate) cost more than the judgement earned, so it is gone. Use `select` to
+choose turns when a budget forces a choice; do
 not expect it to improve a handoff, and see `handoff.recovery_block` for what did.
 """
 from __future__ import annotations
@@ -25,13 +27,14 @@ BATCH = 40
 # the JSON-ENCODED state, and one CJK character encodes to six. A 40-turn Japanese batch
 # came to 120,601 characters against a 60,000 limit, so every batch failed as
 # state_too_large while the result still said "ok" (reported as issue #3). Leave room for
-# the questions, which repeat the three fate descriptions for every turn.
+# the questions, which repeat the two fate descriptions for every turn.
 STATE_BUDGET = 40_000
 _PER_TURN_OVERHEAD = 16
+# Dropping is the only irreversible fate, so it needs a confident answer; anything less is kept.
+DROP_CONFIDENCE = 0.7
 FATE = {
     "keep": "Carries a decision, a constraint, a user preference, an unfinished task, an exact value, path, id, "
-            "command or error that later work depends on",
-    "summarize": "Useful background whose gist matters but whose exact wording does not",
+            "command or error that later work depends on, or is background whose gist later work needs",
     "drop": "Chatter, acknowledgements, superseded attempts, repeated output, or detail nothing later depends on",
 }
 
@@ -71,10 +74,8 @@ def select(
     fates: Dict[int, str] = {index: "keep" for index in range(max(0, total - keep_last), total)}
     judged = [index for index in range(total) if index not in fates]
     for index in judged:
-        fates[index] = "summarize"            # the fail-open default: nothing is dropped unless Jev said so
-        if messages[index].get("role") == "system":
-            fates[index] = "keep"
-    judged = [i for i in judged if fates[i] != "keep" and _text(messages[i]).strip()]
+        fates[index] = "keep"                 # the fail-open default: nothing is dropped unless Jev said so
+    judged = [i for i in judged if messages[i].get("role") != "system" and _text(messages[i]).strip()]
 
     calls, errors, latency, judged_ok = 0, [], 0, set()
     for group in _pack(messages, judged):
@@ -95,14 +96,12 @@ def select(
         judged_ok.update(sendable)
         for i in sendable:
             answer = reply["answers"][f"t{i}"]
-            # Dropping is the only irreversible fate, so it needs a confident answer.
-            if answer["choice"] == "drop" and answer["confidence"] < 0.7:
-                continue
-            fates[i] = answer["choice"]
+            if answer["choice"] == "drop" and answer["confidence"] >= DROP_CONFIDENCE:
+                fates[i] = "drop"
 
     counts = {fate: sum(1 for value in fates.values() if value == fate) for fate in FATE}
     # "ok" used to mean "at least one batch worked", so one good batch hid every failed one
-    # and forty turns sat at the fail-open default while the caller was told all was well.
+    # and forty turns sat at the keep default while the caller was told all was well.
     # The compaction skill tells an agent to use the plain transcript on anything but ok.
     if not judged:
         status = "ok"
@@ -116,22 +115,33 @@ def select(
 
 
 def digest(messages: Sequence[Mapping[str, Any]], selection: Mapping[str, Any], limit: int = 24000) -> str:
-    """The reduced transcript to hand to the summarizing model."""
+    """The reduced transcript to hand to the writing model: every turn not dropped, whole.
+
+    A kept turn is never clipped. If the result is still over ``limit``, the oldest kept
+    turns are left out whole (dropped turns were already gone) and a note at the top says
+    how many, instead of cutting any turn mid-sentence.
+    """
     fates = selection["fates"]
     lines: List[str] = []
     for index, message in enumerate(messages):
-        fate = fates.get(str(index), "summarize")
-        if fate == "drop":
+        if fates.get(str(index), "keep") == "drop":
             continue
         body = _text(message).strip()
         if not body:
             continue
-        if fate == "summarize":
-            body = body[:400] + (" […]" if len(body) > 400 else "")
-        marker = "KEEP VERBATIM" if fate == "keep" else "background"
-        lines.append(f"[{marker}] {message.get('role', 'user')}: {body}")
+        lines.append(f"[KEEP VERBATIM] {message.get('role', 'user')}: {body}")
     text = "\n\n".join(lines)
-    return text if len(text) <= limit else text[-limit:]
+    if len(text) <= limit:
+        return text
+    left, used = 0, 0
+    for line in reversed(lines):
+        if used + len(line) + 2 > limit - 120 and used:
+            break
+        used += len(line) + 2
+        left += 1
+    omitted = len(lines) - left
+    note = f"[note] {omitted} earlier kept turn(s) did not fit and are not shown."
+    return "\n\n".join([note] + lines[len(lines) - left:])
 
 
 # The five headings a handoff needs. Fewer and the next session starts by rediscovering what
@@ -164,9 +174,9 @@ Rules:
 """
 
 _CARRY_MARKED = (
-    "- Every line marked [KEEP VERBATIM] carries a decision, a constraint, an exact value, a path,\n"
-    "  an id, a command or an error. Carry those through UNCHANGED. Do not paraphrase them.\n"
-    "- [background] lines only need their gist, at most a sentence or two of context.\n")
+    "- Every line marked [KEEP VERBATIM] was judged worth carrying: a decision, a constraint, an exact\n"
+    "  value, a path, an id, a command, an error, or background later work needs. Carry decisions,\n"
+    "  values and identifiers through UNCHANGED. Do not paraphrase them.\n")
 # With no marks there is nothing to tell the writer about marks. This is the wording the
 # eval's winning arm used, so what ships is what was measured.
 _CARRY_PLAIN = (
@@ -221,10 +231,10 @@ def handoff_prompt(digest_text: str, previous: str = "", *, confidential: bool =
                    marked: bool = True, words: Optional[int] = None) -> str:
     """The full prompt for whatever text model writes the capsule. Jev cannot write it.
 
-    ``marked`` says whether ``digest_text`` carries [KEEP VERBATIM] / [background] tags. A
+    ``marked`` says whether ``digest_text`` carries [KEEP VERBATIM] tags. A
     plain transcript must be sent with ``marked=False``: the marked prompt tells the writer
-    that untagged-looking background "only needs its gist", which is the wrong thing to say
-    about a transcript nobody has filtered.
+    every line was judged, which is the wrong thing to say about a transcript nobody has
+    filtered.
     """
     budget = int(words) if words else (CONFIDENTIAL_WORDS if confidential else HANDOFF_WORDS)
     prompt = _PROMPT.format(words=max(100, budget), carry=_CARRY_MARKED if marked else _CARRY_PLAIN)
