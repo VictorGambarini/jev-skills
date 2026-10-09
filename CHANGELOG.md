@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.23.0 (2026-10-10)
+
 - **Compaction asks keep or drop only** (`jevkit/compact.py`): the `summarize` fate is gone. A drop needs Jev's drop at confidence 0.7 or more; low-confidence drops, unjudged turns, Jev down, partial batches and sensitive turns never sent are all kept. The digest keeps every non-dropped turn whole (no 400-character clip); over the size cap it leaves out the oldest kept turns whole, with a note. `counts` has only `keep` and `drop`. The old three-fate scorecard (clipped digest lost 4 to 15) is why.
 
 - **jev-router 0.3.0: skill suggestion in the mod.** `prompt.submit` asks `jev hook user-prompt` (with `via: mod`) and adds the suggestion as context beside the prompt; the lane is classified in the same moment, so the two cost the slower one's time. The settings skill hook stands down in sessions the mod handles.
