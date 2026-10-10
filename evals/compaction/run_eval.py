@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Does Jev selection make a handoff better? Measured here, not assumed.
 
-The compaction skill says a handoff written from Jev's keep / summarize / drop digest
+The compaction skill says a handoff written from Jev's keep / drop digest
 "stops losing the one line that mattered". Nothing in this repo ever tested that. Nous
 Research tested a different Jev compaction design against real sessions and found its
 ranking tied plain recency (hermes-agent PR 116246), so the claim needs its own numbers.
@@ -16,10 +16,10 @@ Arms (each is one way to turn a transcript into the text a writer model sees):
   plugin_fallback   what ships when Jev is unavailable: every turn tagged [background]
   tail_plain        no Jev, a prompt that asks for exact values: the fair free baseline
   jev               what ships: compact.select -> compact.digest -> handoff_prompt
-  recency_matched   Jev's keep/summarize/drop COUNTS, assigned by recency instead of by
+  recency_matched   Jev's keep/drop COUNTS, assigned by recency instead of by
                     Jev. Isolates Jev's judgement from the mechanism around it
   regex_keep        keep any turn holding an identifier-shaped string; free
-  failopen          every turn "summarize", the last eight kept: what Jev being down gives
+  failopen          every turn kept, whole: what Jev being down gives
   *_v2              the same selections through digest_v2 below (keep lines placed first,
                     identifier sweep on clipped background). An experiment that lost
   full              the writer reads the whole dialogue: the ceiling for a capsule
@@ -347,7 +347,7 @@ def anchors(messages: Sequence[Mapping[str, Any]], limit: int = 900) -> List[str
 
 # ── digest_v2: an experiment that lost, kept here so the result can be reproduced ────
 # The idea was that compact.digest throws away early keep lines (it cuts the finished text
-# with text[-limit:]) and clips a "summarize" turn to its first 400 characters, so a digest
+# with text[-limit:]) and clipped a "summarize" turn (a fate since removed) to its first 400 characters, so a digest
 # that places keep lines first and sweeps identifiers out of the clipped part should recall
 # more. Measured on seven sessions it recalled LESS than the digest it was meant to replace
 # (paired, closed-book: 5 wins, 12 losses), so it never shipped in jevkit.
@@ -375,7 +375,7 @@ def digest_v2(messages: Sequence[Mapping[str, Any]], selection: Mapping[str, Any
     fates = selection["fates"]
     entries: List[Dict[str, Any]] = []
     for index, message in enumerate(messages):
-        fate = fates.get(str(index), "summarize")
+        fate = fates.get(str(index), "keep")
         body = compact._text(message).strip()
         if fate == "drop" or not body:
             continue
@@ -433,7 +433,8 @@ def build_input(arm: str, turns: List[Dict[str, str]], limit: int, words: int,
     if arm == "none":
         return "", meta
     if arm == "plugin_fallback":
-        return _words(compact.handoff_prompt(_plain(turns, "background", limit)), words), meta
+        # What ships with no Jev: the plain tail, untagged (handoff.py sends marked=False).
+        return _words(compact.handoff_prompt(_plain(turns, "", limit), marked=False), words), meta
     if arm == "tail_plain":
         return _words(compact.handoff_prompt(_plain(turns, "", limit), marked=False), words), meta
     if arm == "full":
@@ -441,8 +442,10 @@ def build_input(arm: str, turns: List[Dict[str, str]], limit: int, words: int,
     selector, _, version = arm.partition("_v2")
     make_digest = digest_v2 if arm.endswith("_v2") else compact.digest
     if selector in ("regex_keep", "failopen"):
-        fates = {i: ("keep" if i >= total - 8 or (selector == "regex_keep" and _IDENT.search(m["content"]))
-                     else "summarize") for i, m in enumerate(turns)}
+        # failopen: Jev down, every turn kept whole. regex_keep: identifier-shaped turns and the
+        # tail kept, the rest dropped, with no judgement at all.
+        fates = {i: ("keep" if selector == "failopen" or i >= total - 8 or _IDENT.search(m["content"])
+                     else "drop") for i, m in enumerate(turns)}
         meta["counts"] = {f: sum(1 for v in fates.values() if v == f) for f in compact.FATE}
         return _words(compact.handoff_prompt(make_digest(turns, _selection(fates), limit)), words), meta
     if jev_selection is None:
@@ -453,14 +456,8 @@ def build_input(arm: str, turns: List[Dict[str, str]], limit: int, words: int,
         return _words(compact.handoff_prompt(make_digest(turns, jev_selection, limit)), words), meta
     if selector == "recency_matched":
         counts = jev_selection["counts"]
-        keep, drop = int(counts.get("keep", 0)), int(counts.get("drop", 0))
-        order = list(range(total - 1, -1, -1))                      # newest first
-        fates = {i: "summarize" for i in range(total)}
-        for i in order[:keep]:
-            fates[i] = "keep"
-        for i in order[::-1][:drop]:                                # oldest are dropped
-            if fates[i] != "keep":
-                fates[i] = "drop"
+        drop = int(counts.get("drop", 0))
+        fates = {i: "drop" if i < drop else "keep" for i in range(total)}   # the oldest are dropped
         meta["counts"] = {f: sum(1 for v in fates.values() if v == f) for f in compact.FATE}
         return _words(compact.handoff_prompt(make_digest(turns, _selection(fates), limit)), words), meta
     raise ValueError(arm)

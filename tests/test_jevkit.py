@@ -612,15 +612,74 @@ class CompactTests(unittest.TestCase):
         fates = out["fates"]
         self.assertEqual(fates["0"], "keep")
         self.assertTrue(all(fates[str(i)] == "keep" for i in range(9, 13)))
-        self.assertEqual(fates["3"], "summarize")
+        self.assertEqual(fates["3"], "keep")
         self.assertEqual(fates["4"], "drop")
         self.assertNotIn("turn 4", compact.digest(self.MESSAGES, out))
+
+    def test_drop_needs_the_threshold_and_everything_else_is_kept(self):
+        def answer(name, q, state):
+            index = int(name[1:])
+            if index == 1:
+                return choice_answer(q, "drop", confidence=0.9)
+            if index == 2:
+                return choice_answer(q, "drop", confidence=0.5)
+            return choice_answer(q, "keep", confidence=0.9)
+        fates = compact.select(self.MESSAGES, keep_last=2, transport=fake(answer))["fates"]
+        self.assertEqual(fates["1"], "drop")
+        self.assertEqual(fates["2"], "keep")
+        self.assertEqual(fates["3"], "keep")
+        self.assertEqual(set(fates.values()), {"keep", "drop"})
+
+    def test_the_question_has_exactly_two_options(self):
+        seen = []
+
+        def answer(name, q, state):
+            seen.append(q)
+            return choice_answer(q, "keep")
+        compact.select(self.MESSAGES, keep_last=2, transport=fake(answer))
+        self.assertTrue(seen)
+        for question in seen:
+            self.assertEqual(set(question["criteria"]), {"keep", "drop"})
+
+    def test_digest_never_clips_a_kept_turn(self):
+        long = "x" * 5000 + " END"
+        messages = [{"role": "user", "content": long}, {"role": "assistant", "content": "ok"}]
+        out = compact.digest(messages, {"fates": {"0": "keep", "1": "drop"}})
+        self.assertIn(long, out)
+        self.assertNotIn("[…]", out)
+        self.assertNotIn("ok", out.replace("[KEEP VERBATIM]", ""))
+        # Over the cap: whole oldest turns go, with a note; nothing is cut mid-turn.
+        many = [{"role": "user", "content": f"turn {i} " + "y" * 200} for i in range(30)]
+        capped = compact.digest(many, {"fates": {}}, limit=2000)
+        self.assertIn("did not fit", capped)
+        self.assertIn("turn 29 ", capped)
+        for line in capped.split("\n\n")[1:]:
+            self.assertTrue(line.endswith("y" * 200))
+
+    def test_partial_leaves_unjudged_turns_kept(self):
+        calls = []
+
+        def flaky(body, headers, timeout):
+            calls.append(1)
+            if len(calls) == 1:
+                raise client.JevError("state_too_large")
+            request = json.loads(body)
+            return json.dumps({"answers": {n: choice_answer(q, "drop", confidence=0.9)
+                               for n, q in request["questions"].items()}, "usage": {}}).encode()
+        messages = [{"role": "user", "content": "日本語のテキストです。これはテスト用の長い文章で、" * 20} for _ in range(48)]
+        with mock.patch.object(keystore, "resolve", lambda *a, **k: "apikey_" + "a" * 40):
+            out = compact.select(messages, keep_last=0, transport=flaky)
+        self.assertEqual(out["status"], "partial")
+        self.assertTrue(out["unjudged"])
+        for index in out["unjudged"]:
+            self.assertEqual(out["fates"][str(index)], "keep")
+        self.assertGreater(out["counts"]["drop"], 0)
 
     def test_outage_drops_nothing(self):
         def down(body, headers, timeout):
             raise client.JevError("network")
         out = compact.select(self.MESSAGES, transport=down)
-        self.assertEqual(out["counts"]["drop"], 0)
+        self.assertEqual(out["counts"], {"keep": len(self.MESSAGES), "drop": 0})
         self.assertEqual(out["status"], "fail_open")
 
 

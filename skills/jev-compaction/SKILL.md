@@ -1,6 +1,6 @@
 ---
 name: jev-compaction
-description: Use when a transcript has to be cut to a fixed size and you must choose which turns go. Jev marks each turn keep, summarize or drop. Measured: it does not make a handoff better.
+description: Use when a transcript has to be cut to a fixed size and you must choose which turns go. Jev marks each turn keep or drop. Measured: it does not make a handoff better.
 version: 0.2.0
 license: MIT
 metadata:
@@ -12,9 +12,10 @@ metadata:
 
 Jev cannot write a summary. It can mark each turn of a transcript:
 
-- **keep**: carries a decision, a constraint, a preference, unfinished work, or an exact value, path, id, command or error that later work depends on.
-- **summarize**: background whose gist matters. In the digest this is the turn's first 400 characters, nothing more. Jev writes no gist.
-- **drop**: chatter, superseded attempts, repeated output.
+- **keep**: carries a decision, a constraint, a preference, unfinished work, or an exact value, path, id, command or error that later work depends on, or is background whose gist later work needs.
+- **drop**: chatter, acknowledgements, superseded attempts, repeated output, detail nothing later depends on.
+
+There is no third fate. When in doubt a turn is kept, and a kept turn is kept whole.
 
 It judges a long turn on its first 350 and last 350 characters, redacted, 40 turns per request, and sees no other turn while it does.
 
@@ -29,7 +30,7 @@ This skill used to say a handoff written from Jev's digest "stops losing the one
 | **the whole dialogue** | **1,200 words** | **58.7%** | **75.0%** |
 | nothing: no handoff at all | | | 56.7% |
 
-Jev's marks did beat the same marks handed out by recency (11 questions to 4), so the judgement is real. The digest built around it clips every other turn to 400 characters, and that cost more than the judgement earned. Nous Research found the same shape with a different Jev design ([hermes-agent PR 116246](https://github.com/NousResearch/hermes-agent/pull/116246)).
+Jev's marks did beat the same marks handed out by recency (11 questions to 4), so the judgement is real. The digest built around it clipped every middle-fate turn to 400 characters, and that cost more than the judgement earned. That middle fate (summarize) has been removed. Nous Research found the same shape with a different Jev design ([hermes-agent PR 116246](https://github.com/NousResearch/hermes-agent/pull/116246)).
 
 So, for a handoff:
 
@@ -53,16 +54,16 @@ When the size is fixed and something has to go: a small local writer, a context 
      jev compact-select --digest < transcript.json      # {"messages":[...]} or a bare list
      ```
 
-3. Write from `digest`. `[KEEP VERBATIM]` lines go in unchanged. `[background]` lines are clipped already; treat them as context, not as the record.
-4. The digest is cut to its last 24,000 characters by default, oldest first, keep lines included. Pass a larger `limit` if early keep lines matter.
+3. Write from `digest`. Every line is `[KEEP VERBATIM]` and whole; nothing is clipped.
+4. The digest is capped at 24,000 characters by default. Dropped turns are already absent, so if it is still over, the oldest kept turns are left out whole, with a `[note]` line saying how many. Pass a larger `limit` if early turns matter.
 
 ## Guarantees
 
 - The last six messages are always kept (`keep_last`); system messages are always kept.
-- Nothing is dropped unless Jev was confident (0.7+). An unjudged turn is marked summarize, never drop. Summarize still means clipped to 400 characters.
+- Nothing is dropped unless Jev said drop with confidence 0.7 or more. A low-confidence drop and an unjudged turn are kept.
 - Turns that look like they hold a secret are not sent to Jev.
-- Jev down: every turn comes back `summarize`. That is a worse input than the plain transcript, so on `status: "fail_open"` use the plain transcript instead.
-- **`status: "partial"`** means some batches answered and some did not; the ids in `unjudged` sat at the `summarize` default with nobody judging them. Treat it like `fail_open` unless `unjudged` is short and you can see it does not cover the turns you care about. It used to report `ok` in this case, so one good batch hid every failed one.
+- Jev down: every turn comes back `keep`, which is the plain transcript; `status` is `fail_open`.
+- **`status: "partial"`** means some batches answered and some did not; the ids in `unjudged` sat at the `keep` default with nobody judging them. They are safe to use, just not trimmed. It used to report `ok` in this case, so one good batch hid every failed one.
 
 ## When to compact at all
 

@@ -682,7 +682,7 @@ _TOOLS = {
                               round_index=int(a.get("round_index") or 1), max_rounds=int(a.get("max_rounds") or 3), reading_failed=bool(a.get("reading_failed")),
                               top_k=int(a.get("top_k") or 6))),
     "jev_compact_select": (
-        "Mark each message keep / summarize / drop and get back a reduced transcript with the must-survive lines "
+        "Mark each message keep / drop and get back a reduced transcript with the must-survive lines "
         "flagged. Use it when a transcript has to be cut to a fixed size and you want help choosing which turns go. "
         "Do not expect a better handoff from it: measured on real sessions, a handoff written from this digest "
         "recalled no more than one written from the plain tail of the same size. What did help was the next session "

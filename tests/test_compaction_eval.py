@@ -56,12 +56,12 @@ class LoadTests(unittest.TestCase):
 
 class ArmTests(unittest.TestCase):
     def selection(self, n, keep, drop):
-        fates = {str(i): "summarize" for i in range(n)}
+        fates = {str(i): "keep" for i in range(n)}
         for i in range(0, keep * 2, 2):                # Jev keeps scattered EARLY turns
             fates[str(i)] = "keep"
         for i in range(n - 1, n - 1 - drop, -1):
             fates[str(i)] = "drop"
-        counts = {f: sum(1 for v in fates.values() if v == f) for f in ("keep", "summarize", "drop")}
+        counts = {f: sum(1 for v in fates.values() if v == f) for f in ("keep", "drop")}
         return {"fates": fates, "counts": counts, "jev_calls": 1, "latency_ms": 500, "status": "ok"}
 
     def test_recency_matched_spends_exactly_jevs_budget(self):
@@ -70,7 +70,7 @@ class ArmTests(unittest.TestCase):
         t = turns(40)
         jev = self.selection(40, keep=9, drop=11)
         _, meta = ev.build_input("recency_matched", t, 24_000, 400, jev)
-        self.assertEqual(meta["counts"]["keep"], 9)
+        self.assertEqual(meta["counts"]["keep"], 29)
         self.assertEqual(meta["counts"]["drop"], 11)
         self.assertEqual(meta["jev_calls"], 0)
 
@@ -85,7 +85,7 @@ class ArmTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             ev.build_input("recency_matched", turns(10), 24_000, 400, None)
 
-    def test_the_free_baseline_is_not_told_its_lines_only_need_their_gist(self):
+    def test_the_free_baseline_is_not_told_its_lines_were_judged(self):
         """The shipped no-Jev path tags every line [background] and the prompt says those
         "only need their gist". Comparing Jev to THAT flatters Jev, so the fair baseline
         gets a prompt that asks for exact values and says nothing about markers."""
@@ -94,7 +94,7 @@ class ArmTests(unittest.TestCase):
         self.assertNotIn("[background]", prompt)
         self.assertIn("UNCHANGED", prompt)
         fallback, _ = ev.build_input("plugin_fallback", turns(10), 24_000, 400, None)
-        self.assertIn("only need their gist", fallback)
+        self.assertNotIn("[KEEP VERBATIM]", fallback)
 
     def test_every_capped_arm_gets_the_same_transcript_budget(self):
         t = turns(900)
@@ -111,9 +111,8 @@ class ArmTests(unittest.TestCase):
         t = [{"role": "user", "content": "thanks, sounds good to me"},
              {"role": "assistant", "content": "the config is at /srv/app/conf/render.toml on port 8431"}] + turns(10)
         _, meta = ev.build_input("regex_keep", t, 24_000, 400, None)
-        self.assertEqual(meta["counts"]["drop"], 0)
         self.assertGreaterEqual(meta["counts"]["keep"], 9)      # the identifier turn + the last eight
-        self.assertGreaterEqual(meta["counts"]["summarize"], 1)
+        self.assertGreaterEqual(meta["counts"]["drop"], 1)
 
 
 class SearchTests(unittest.TestCase):
